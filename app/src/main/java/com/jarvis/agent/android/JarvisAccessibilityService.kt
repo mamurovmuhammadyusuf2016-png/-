@@ -447,6 +447,13 @@ class JarvisAccessibilityService : AccessibilityService(), DeviceController {
             .distinctBy { it.packageName }
             .sortedBy { it.label }
         appCache = apps
+        JarvisRuntime.log("Вижу приложений: ${apps.size}")
+        if (apps.isEmpty()) {
+            JarvisRuntime.log(
+                "Список приложений пуст — Android не даёт их видеть. Проверьте, что у Jarvis " +
+                    "не отозвано разрешение на доступ к другим приложениям."
+            )
+        }
         return apps
     }
 

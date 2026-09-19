@@ -305,6 +305,10 @@ class AgentLoop(
 
     private fun openApp(query: String): Outcome {
         val apps = device.installedApps()
+        if (apps.isEmpty()) {
+            say("Не вижу список приложений на этом телефоне")
+            return Outcome.Stop(AgentStatus.FAILED, "Список установленных приложений пуст")
+        }
         val match = AppMatcher.resolve(query, apps)
 
         if (match != null) {
@@ -342,7 +346,8 @@ class AgentLoop(
         }
 
         say("Не нашёл приложение $query")
-        return Outcome.Stop(AgentStatus.FAILED, "Приложение \"$query\" не установлено")
+        log("не найдено \"$query\" среди ${apps.size} приложений")
+        return Outcome.Stop(AgentStatus.FAILED, "Приложение \"$query\" не найдено")
     }
 
     /**
