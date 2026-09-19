@@ -1,11 +1,13 @@
 package com.jarvis.agent.android
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Bundle
@@ -17,14 +19,20 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import com.jarvis.agent.core.Phrases
 
 /**
  * Always-on listening loop.
  *
  * Android's [SpeechRecognizer] is built for one short utterance at a time, so "always on"
- * really means "restart it every time it finishes". That is the documented limitation; it
- * works, it just costs a little battery.
+ * really means "restart it every time it finishes".
+ *
+ * The restart is the delicate part. Calling `startListening` while a session is still alive
+ * is answered with ERROR_CLIENT (5), and a naive loop then spins on that error forever.
+ * Hence: exactly one in-flight session at a time ([sessionActive]), exactly one pending
+ * restart ([restartRunnable]), a fresh recogniser object after a client error, and a
+ * growing delay so a device that simply refuses to listen is not hammered.
  */
 class VoiceService : android.app.Service() {
 
@@ -33,7 +41,10 @@ class VoiceService : android.app.Service() {
         const val ACTION_STOP = "com.jarvis.agent.STOP_LISTENING"
         private const val CHANNEL_ID = "jarvis_listening"
         private const val NOTIFICATION_ID = 7341
-        private const val RESTART_DELAY_MS = 700L
+        private const val RESTART_DELAY_MS = 600L
+        private const val MAX_BACKOFF_MS = 30_000L
+        /** After this many client errors in a row, say out loud what the user must fix. */
+        private const val CLIENT_ERRORS_BEFORE_HINT = 4
 
         @Volatile
         var listening: Boolean = false
@@ -41,9 +52,16 @@ class VoiceService : android.app.Service() {
     }
 
     private val main = Handler(Looper.getMainLooper())
+    private val restartRunnable = Runnable { startListening() }
+
     private var recognizer: SpeechRecognizer? = null
+
+    /** True between startListening() and the matching onResults/onError. */
+    private var sessionActive = false
     private var shuttingDown = false
     private var speaking = false
+    private var consecutiveClientErrors = 0
+    private var hintGiven = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -52,22 +70,28 @@ class VoiceService : android.app.Service() {
         JarvisRuntime.init(applicationContext)
         JarvisRuntime.speaker?.setStateListener { isSpeaking ->
             speaking = isSpeaking
-            if (!isSpeaking) main.postDelayed({ startListening() }, RESTART_DELAY_MS)
+            if (isSpeaking) {
+                // Stop listening while we talk, otherwise Jarvis transcribes itself.
+                cancelSession()
+            } else {
+                scheduleRestart(RESTART_DELAY_MS)
+            }
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> {
-                stopEverything()
-                return START_NOT_STICKY
-            }
+        if (intent?.action == ACTION_STOP) {
+            stopEverything()
+            return START_NOT_STICKY
         }
         startInForeground()
         shuttingDown = false
         listening = true
-        JarvisRuntime.requirePrefs().let { JarvisRuntime.speaker?.setLanguage(it.language) }
-        startListening()
+        consecutiveClientErrors = 0
+        hintGiven = false
+        JarvisRuntime.speaker?.setLanguage(JarvisRuntime.requirePrefs().language)
+        JarvisRuntime.log("Listening started")
+        scheduleRestart(200)
         return START_STICKY
     }
 
@@ -79,16 +103,9 @@ class VoiceService : android.app.Service() {
     private fun stopEverything() {
         shuttingDown = true
         listening = false
-        main.removeCallbacksAndMessages(null)
-        recognizer?.let {
-            try {
-                it.cancel()
-                it.destroy()
-            } catch (e: Exception) {
-                // ignore
-            }
-        }
-        recognizer = null
+        sessionActive = false
+        main.removeCallbacks(restartRunnable)
+        destroyRecognizer()
         JarvisRuntime.log("Listening stopped")
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -96,19 +113,79 @@ class VoiceService : android.app.Service() {
 
     // ---------------------------------------------------------------- recognition
 
+    private fun hasMicPermission(): Boolean = ContextCompat.checkSelfPermission(
+        this,
+        Manifest.permission.RECORD_AUDIO
+    ) == PackageManager.PERMISSION_GRANTED
+
+    private fun scheduleRestart(delay: Long) {
+        if (shuttingDown) return
+        main.removeCallbacks(restartRunnable)
+        main.postDelayed(restartRunnable, delay)
+    }
+
+    /** 600ms, 1.2s, 2.4s … capped, so a device that keeps refusing is not hammered. */
+    private fun backoffMillis(): Long {
+        if (consecutiveClientErrors <= 0) return RESTART_DELAY_MS
+        val shift = (consecutiveClientErrors - 1).coerceAtMost(6)
+        return (RESTART_DELAY_MS shl shift).coerceAtMost(MAX_BACKOFF_MS)
+    }
+
+    private fun destroyRecognizer() {
+        recognizer?.let {
+            try {
+                it.cancel()
+                it.destroy()
+            } catch (e: Exception) {
+                // The service may already be gone; nothing useful to do.
+            }
+        }
+        recognizer = null
+    }
+
+    private fun cancelSession() {
+        main.removeCallbacks(restartRunnable)
+        sessionActive = false
+        try {
+            recognizer?.cancel()
+        } catch (e: Exception) {
+            // ignore
+        }
+    }
+
     private fun startListening() {
         if (shuttingDown || speaking) return
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            JarvisRuntime.log("Speech recognition is not available on this device")
-            return
-        }
         main.post {
-            if (shuttingDown) return@post
-            if (recognizer == null) {
-                recognizer = SpeechRecognizer.createSpeechRecognizer(this).also {
-                    it.setRecognitionListener(Listener())
-                }
+            if (shuttingDown || speaking) return@post
+            // The single most important guard: one session at a time, or ERROR_CLIENT.
+            if (sessionActive) return@post
+
+            if (!hasMicPermission()) {
+                JarvisRuntime.log("Нет разрешения на микрофон — откройте Jarvis и выдайте доступ")
+                stopEverything()
+                return@post
             }
+            if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+                JarvisRuntime.log(
+                    "На устройстве нет службы распознавания речи. " +
+                        "Установите/включите приложение Google и выберите его в " +
+                        "Настройки → Приложения → Приложения по умолчанию → Голосовой ввод."
+                )
+                scheduleRestart(10_000)
+                return@post
+            }
+
+            val r = recognizer ?: try {
+                SpeechRecognizer.createSpeechRecognizer(this).also { created ->
+                    created.setRecognitionListener(Listener())
+                    recognizer = created
+                }
+            } catch (e: Exception) {
+                JarvisRuntime.log("Не удалось создать распознаватель: ${e.message}")
+                scheduleRestart(3000)
+                return@post
+            }
+
             val prefs = JarvisRuntime.requirePrefs()
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(
@@ -116,27 +193,61 @@ class VoiceService : android.app.Service() {
                     RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
                 )
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, prefs.language)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, prefs.language)
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
                 putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
+                if (prefs.preferOffline) {
+                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                }
             }
+
             try {
-                recognizer?.startListening(intent)
+                sessionActive = true
+                r.startListening(intent)
             } catch (e: Exception) {
+                sessionActive = false
                 JarvisRuntime.log("startListening failed: ${e.message}")
-                scheduleRestart(1500)
+                destroyRecognizer()
+                scheduleRestart(2000)
             }
         }
     }
 
-    private fun scheduleRestart(delay: Long) {
-        if (shuttingDown) return
-        main.removeCallbacksAndMessages(null)
-        main.postDelayed({ startListening() }, delay)
+    /** ERROR_CLIENT usually means the recogniser object is wedged — throw it away. */
+    private fun handleClientError() {
+        consecutiveClientErrors++
+        destroyRecognizer()
+        if (consecutiveClientErrors >= CLIENT_ERRORS_BEFORE_HINT && !hintGiven) {
+            hintGiven = true
+            val hint = "Распознавание речи не запускается. Проверьте, что в " +
+                "Настройки → Приложения → Приложения по умолчанию → Голосовой ввод " +
+                "выбрано приложение Google, и что у него есть доступ к микрофону."
+            JarvisRuntime.log(hint)
+            JarvisRuntime.speaker?.say("Не могу запустить распознавание речи. Подробности в журнале.")
+        }
+        scheduleRestart(backoffMillis())
+    }
+
+    private fun describeError(error: Int): String = when (error) {
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "таймаут сети"
+        SpeechRecognizer.ERROR_NETWORK -> "нет сети"
+        SpeechRecognizer.ERROR_AUDIO -> "ошибка записи звука"
+        SpeechRecognizer.ERROR_SERVER -> "ошибка сервера распознавания"
+        SpeechRecognizer.ERROR_CLIENT -> "ERROR_CLIENT (5): служба распознавания отказала"
+        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "тишина"
+        SpeechRecognizer.ERROR_NO_MATCH -> "ничего не распознано"
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "распознаватель занят"
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "нет разрешения на микрофон"
+        else -> "код $error"
     }
 
     private inner class Listener : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) {}
+        override fun onReadyForSpeech(params: Bundle?) {
+            // A session really started, so whatever was wedged is fine again.
+            consecutiveClientErrors = 0
+        }
+
         override fun onBeginningOfSpeech() {}
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {}
@@ -145,20 +256,49 @@ class VoiceService : android.app.Service() {
         override fun onPartialResults(partialResults: Bundle?) {}
 
         override fun onError(error: Int) {
-            // NO_MATCH / SPEECH_TIMEOUT are the normal "nobody said anything" case.
-            val delay = when (error) {
+            sessionActive = false
+            when (error) {
+                // The normal "nobody said anything" case — not worth a log line.
                 SpeechRecognizer.ERROR_NO_MATCH,
-                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> RESTART_DELAY_MS
-                SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> 1500L
+                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
+                    consecutiveClientErrors = 0
+                    scheduleRestart(RESTART_DELAY_MS)
+                }
+
+                SpeechRecognizer.ERROR_CLIENT -> {
+                    JarvisRuntime.log("Распознавание: ${describeError(error)}, пересоздаю распознаватель")
+                    handleClientError()
+                }
+
+                SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> {
+                    JarvisRuntime.log("Распознавание: ${describeError(error)}")
+                    destroyRecognizer()
+                    scheduleRestart(1500)
+                }
+
+                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
+                    JarvisRuntime.log("Распознавание: ${describeError(error)} — выдайте доступ в приложении")
+                    JarvisRuntime.speaker?.say("Нет доступа к микрофону")
+                    stopEverything()
+                }
+
+                SpeechRecognizer.ERROR_NETWORK,
+                SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
+                SpeechRecognizer.ERROR_SERVER -> {
+                    JarvisRuntime.log("Распознавание: ${describeError(error)}")
+                    scheduleRestart(3000)
+                }
+
                 else -> {
-                    JarvisRuntime.log("Recognizer error $error")
-                    2000L
+                    JarvisRuntime.log("Распознавание: ${describeError(error)}")
+                    scheduleRestart(2000)
                 }
             }
-            scheduleRestart(delay)
         }
 
         override fun onResults(results: Bundle?) {
+            sessionActive = false
+            consecutiveClientErrors = 0
             val texts = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
             val heard = texts.firstOrNull()?.trim().orEmpty()
             if (heard.isNotEmpty()) {

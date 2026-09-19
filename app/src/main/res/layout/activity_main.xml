@@ -97,6 +97,12 @@
             android:layout_height="wrap_content"
             android:text="Требовать слово активации" />
 
+        <CheckBox
+            android:id="@+id/preferOffline"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Офлайн-распознавание (если онлайн не работает)" />
+
         <Button
             android:id="@+id/saveSettings"
             android:layout_width="match_parent"

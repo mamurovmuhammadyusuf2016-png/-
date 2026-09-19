@@ -40,6 +40,14 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(KEY_REQUIRE_WAKE, true)
         set(value) = sp.edit().putBoolean(KEY_REQUIRE_WAKE, value).apply()
 
+    /**
+     * Ask the recogniser for the on-device engine. Helps on devices where the online
+     * path is blocked or unreliable; requires the offline language pack to be installed.
+     */
+    var preferOffline: Boolean
+        get() = sp.getBoolean(KEY_OFFLINE, false)
+        set(value) = sp.edit().putBoolean(KEY_OFFLINE, value).apply()
+
     var language: String
         get() = sp.getString(KEY_LANG, "ru-RU").orEmpty().ifBlank { "ru-RU" }
         set(value) = sp.edit().putString(KEY_LANG, value.trim()).apply()
@@ -54,5 +62,6 @@ class Prefs(context: Context) {
         const val KEY_WAKE = "wake_word"
         const val KEY_REQUIRE_WAKE = "require_wake"
         const val KEY_LANG = "language"
+        const val KEY_OFFLINE = "prefer_offline"
     }
 }

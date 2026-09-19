@@ -32,6 +32,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var wakeWordInput: EditText
     private lateinit var languageInput: EditText
     private lateinit var requireWakeCheck: CheckBox
+    private lateinit var offlineCheck: CheckBox
     private lateinit var commandInput: EditText
 
     private var dialog: AlertDialog? = null
@@ -61,6 +62,7 @@ class MainActivity : AppCompatActivity() {
         wakeWordInput = findViewById(R.id.wakeWord)
         languageInput = findViewById(R.id.language)
         requireWakeCheck = findViewById(R.id.requireWake)
+        offlineCheck = findViewById(R.id.preferOffline)
         commandInput = findViewById(R.id.command)
 
         loadPrefs()
@@ -128,6 +130,7 @@ class MainActivity : AppCompatActivity() {
         wakeWordInput.setText(p.wakeWord)
         languageInput.setText(p.language)
         requireWakeCheck.isChecked = p.requireWakeWord
+        offlineCheck.isChecked = p.preferOffline
     }
 
     private fun savePrefs() {
@@ -138,6 +141,7 @@ class MainActivity : AppCompatActivity() {
         p.wakeWord = wakeWordInput.text.toString()
         p.language = languageInput.text.toString()
         p.requireWakeWord = requireWakeCheck.isChecked
+        p.preferOffline = offlineCheck.isChecked
         JarvisRuntime.speaker?.setLanguage(p.language)
     }
 
