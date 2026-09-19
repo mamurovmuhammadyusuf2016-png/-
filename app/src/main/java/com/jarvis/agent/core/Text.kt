@@ -55,22 +55,24 @@ object Text {
      * that gives an empty string and the element becomes unmatchable, which is how the agent
      * ended up tapping a message bubble instead of Send. Give the common glyphs words.
      */
-    private val GLYPHS: Map<Char, String> = mapOf(
-        '➤' to "send отправить", '➢' to "send отправить", '▶' to "send отправить",
-        '→' to "send отправить далее", '⇧' to "send отправить", '↑' to "send отправить",
-        '✓' to "ok готово подтвердить", '✔' to "ok готово подтвердить",
-        '✕' to "close закрыть", '✖' to "close закрыть", '×' to "close закрыть",
-        '⋮' to "menu меню ещё", '⋯' to "menu меню ещё", '≡' to "menu меню",
-        '☰' to "menu меню", '←' to "back назад", '‹' to "back назад",
-        '+' to "add добавить новый", '🔍' to "search поиск", '🔎' to "search поиск",
-        '⚙' to "settings настройки", '🏠' to "home домой"
+    // Keyed by String, not Char: an emoji is a surrogate pair and cannot be a Char literal.
+    private val GLYPHS: List<Pair<String, String>> = listOf(
+        "\u27A4" to "send отправить", "\u27A2" to "send отправить", "\u25B6" to "send отправить",
+        "\u2192" to "send отправить далее", "\u21E7" to "send отправить", "\u2191" to "send отправить",
+        "\u2713" to "ok готово подтвердить", "\u2714" to "ok готово подтвердить",
+        "\u2715" to "close закрыть", "\u2716" to "close закрыть", "\u00D7" to "close закрыть",
+        "\u22EE" to "menu меню ещё", "\u22EF" to "menu меню ещё", "\u2261" to "menu меню",
+        "\u2630" to "menu меню", "\u2190" to "back назад", "\u2039" to "back назад",
+        "+" to "add добавить новый",
+        "\uD83D\uDD0D" to "search поиск", "\uD83D\uDD0E" to "search поиск",
+        "\u2699" to "settings настройки", "\uD83C\uDFE0" to "home домой"
     )
 
     /** Words for any glyphs in [raw], or an empty string when there are none. */
     fun glyphWords(raw: String?): String {
         if (raw.isNullOrEmpty() || raw.length > 4) return ""
-        val words = raw.mapNotNull { GLYPHS[it] }
-        return words.joinToString(" ")
+        return GLYPHS.filter { raw.contains(it.first) }
+            .joinToString(" ") { it.second }
     }
 
     /**
