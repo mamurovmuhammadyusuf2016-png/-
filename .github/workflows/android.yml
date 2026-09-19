@@ -36,14 +36,35 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Unit tests (15 scenarios + core)
-        run: ./gradlew test --stacktrace
+      # Gradle buries compile errors under a hundred lines of stack trace; surface them.
+      - name: Unit tests (scenarios + core)
+        run: |
+          set +e
+          ./gradlew test > build.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            echo "----- compile errors -----"
+            grep -E "^e: " build.log | head -80
+            echo "----- failed tests -----"
+            grep -E "FAILED|expected:|AssertionError" build.log | head -60
+            echo "----- tail -----"
+            tail -n 25 build.log
+          fi
+          exit $code
 
       # The key is deliberately NOT passed here. This APK is published to a public
       # release, and a key compiled into it is readable with `strings`. You paste your
       # key into the app once, on the phone.
       - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          set +e
+          ./gradlew assembleDebug > build.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            grep -E "^e: |error:" build.log | head -80
+            tail -n 25 build.log
+          fi
+          exit $code
 
       - name: Upload test report
         if: always()

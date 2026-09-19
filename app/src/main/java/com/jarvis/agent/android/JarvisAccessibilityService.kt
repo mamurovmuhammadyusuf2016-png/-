@@ -19,6 +19,7 @@ import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.core.content.ContextCompat
 import com.jarvis.agent.core.AppEntry
 import com.jarvis.agent.core.Bounds
 import com.jarvis.agent.core.DeviceController
@@ -124,7 +125,14 @@ class JarvisAccessibilityService : AccessibilityService(), DeviceController {
             addDataScheme("package")
         }
         try {
-            registerReceiver(packageWatcher, filter)
+            // API 34 refuses an unflagged registration; these are protected system
+            // broadcasts, so nothing outside the system may reach it.
+            ContextCompat.registerReceiver(
+                this,
+                packageWatcher,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
             packageWatcherRegistered = true
         } catch (e: Exception) {
             Log.w(TAG, "package watcher not registered", e)
@@ -164,6 +172,9 @@ class JarvisAccessibilityService : AccessibilityService(), DeviceController {
 
         val nodes = ArrayList<ScreenNode>()
         val registry = HashMap<Int, AccessibilityNodeInfo>()
+        // How many nodes already share this id, so sibling rows (OTP cells, list items)
+        // that all carry one viewId still get distinct keys.
+        val occurrences = HashMap<String, Int>()
         var nextId = 0
         var truncated = false
 
@@ -192,9 +203,13 @@ class JarvisAccessibilityService : AccessibilityService(), DeviceController {
             if (interesting && rect.width() > 0 && rect.height() > 0) {
                 val id = nextId++
                 registry[id] = node
+                val identity = viewId ?: className ?: "view"
+                val occurrence = occurrences[identity] ?: 0
+                occurrences[identity] = occurrence + 1
                 nodes.add(
                     ScreenNode(
                         id = id,
+                        occurrence = occurrence,
                         text = text,
                         contentDescription = desc,
                         viewId = viewId,
@@ -231,11 +246,14 @@ class JarvisAccessibilityService : AccessibilityService(), DeviceController {
     private fun liveNode(node: ScreenNode): AccessibilityNodeInfo? {
         val live = frame?.nodes?.get(node.id) ?: return null
         if (!safeRefresh(live)) return null
-        // Recycled list rows keep the same view object with different content.
-        val sameText = (live.text?.toString() ?: "") == (if (node.password) live.text?.toString() ?: "" else node.text ?: "")
-        val sameDesc = (live.contentDescription?.toString() ?: "") == (node.contentDescription ?: "")
+        // A RecyclerView rebinds the same view object to a different row, and refresh()
+        // still succeeds — so check it is still showing what we matched on.
         val sameId = (live.viewIdResourceName ?: "") == (node.viewId ?: "")
-        return if (sameId && (sameText || sameDesc)) live else null
+        if (!sameId) return null
+        if (node.password) return live
+        val sameText = (live.text?.toString() ?: "") == (node.text ?: "")
+        val sameDesc = (live.contentDescription?.toString() ?: "") == (node.contentDescription ?: "")
+        return if (sameText || sameDesc) live else null
     }
 
     // ---------------------------------------------------------------- acting on the screen
