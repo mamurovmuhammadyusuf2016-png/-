@@ -243,9 +243,10 @@ object ScreenMatcher {
             if (fromViewId) {
                 // A resource id is weaker evidence than what the user can actually read.
                 s -= 5
-            } else if (n.length > 12 && n.length > q.length * 3) {
-                // A long free-form label that merely mentions the word is not a button:
+            } else if (s < 80 && n.length > 12 && n.length > q.length * 3) {
+                // A long free-form label that merely *mentions* the word is not a button:
                 // a message bubble saying "надо отправить до 6" is not the send button.
+                // A label that starts with the query ("Поиск или введите адрес") still is.
                 s = minOf(s, 50)
             }
 

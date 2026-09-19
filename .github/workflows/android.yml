@@ -43,12 +43,10 @@ jobs:
           ./gradlew test > build.log 2>&1
           code=$?
           if [ $code -ne 0 ]; then
-            echo "----- compile errors -----"
-            grep -E "^e: " build.log | head -80
             echo "----- failed tests -----"
-            grep -E "FAILED|expected:|AssertionError" build.log | head -60
-            echo "----- tail -----"
-            tail -n 25 build.log
+            grep -E "FAILED|expected:|AssertionError|Tests? .* failed" build.log | head -40
+            echo "----- compile errors (last, so a log tail shows them) -----"
+            grep -E "^e: " build.log | sed 's|file:///home/runner/work/-/-/||' | head -60
           fi
           exit $code
 
@@ -61,8 +59,8 @@ jobs:
           ./gradlew assembleDebug > build.log 2>&1
           code=$?
           if [ $code -ne 0 ]; then
-            grep -E "^e: |error:" build.log | head -80
-            tail -n 25 build.log
+            tail -n 15 build.log
+            grep -E "^e: |error:" build.log | sed 's|file:///home/runner/work/-/-/||' | head -60
           fi
           exit $code
 

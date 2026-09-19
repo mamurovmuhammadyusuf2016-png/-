@@ -111,10 +111,10 @@ class AgentScenarioTest {
     @Test
     fun scenario07_typeText() {
         val phone = FakePhone(screenProvider = { FakePhone.NOTES_SCREEN })
-        val result = loop(phone).run("напечатай привет из Jarvis")
+        val result = loop(phone).run("напечатай привет мир")
 
         assertEquals(AgentStatus.SUCCESS, result.status)
-        assertEquals(listOf("привет из Jarvis"), phone.typedTexts)
+        assertEquals(listOf("привет мир"), phone.typedTexts)
         assertEquals(listOf("Заметка"), phone.typedInto)
     }
 

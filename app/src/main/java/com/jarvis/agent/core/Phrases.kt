@@ -50,10 +50,13 @@ object Phrases {
             if (idx < 0) continue
             val before = text.take(idx)
             val after = text.drop(idx + w.length)
-            // Only strip a standalone word, not a syllable inside another one.
+            // Only a standalone word, not a syllable inside another one...
             val boundedLeft = before.isEmpty() || !before.last().isLetter()
             val boundedRight = after.isEmpty() || !after.first().isLetter()
-            if (boundedLeft && boundedRight) {
+            // ...and only at an edge: "напечатай привет из Jarvis" is text to type, and
+            // cutting the word out of the middle would mangle the message.
+            val atEdge = before.isBlank() || after.isBlank()
+            if (boundedLeft && boundedRight && atEdge) {
                 text = (before + " " + after).trim().trim(' ', ',', '.', '!', '?', '-', ':', ';')
                 return text
             }
