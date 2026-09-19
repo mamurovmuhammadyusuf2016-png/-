@@ -10,6 +10,9 @@ interface DeviceController {
     fun launchPackage(packageName: String): Boolean
     fun openSystemSettings(): Boolean
     fun screen(): ScreenSnapshot
+
+    /** Package of the app currently in front, so we do not wait for a launch that already happened. */
+    fun foregroundPackage(): String?
     fun tap(node: ScreenNode): Boolean
     fun setText(node: ScreenNode, text: String): Boolean
     fun scroll(direction: ScrollDirection): Boolean

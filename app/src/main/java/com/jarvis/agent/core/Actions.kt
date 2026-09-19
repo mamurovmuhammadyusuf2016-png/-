@@ -3,11 +3,20 @@ package com.jarvis.agent.core
 enum class ScrollDirection { DOWN, UP, LEFT, RIGHT;
 
     companion object {
-        fun parse(raw: String?): ScrollDirection = when (Text.normalize(raw)) {
-            "up", "вверх", "наверх", "выше" -> UP
-            "left", "влево", "налево" -> LEFT
-            "right", "вправо", "направо" -> RIGHT
-            else -> DOWN
+        /**
+         * Reads the direction from any word in the phrase: "прокрути немного вверх" must
+         * scroll up, not fall through to the default because of the extra word.
+         */
+        fun parse(raw: String?): ScrollDirection {
+            for (word in Text.tokens(raw)) {
+                when (word) {
+                    "up", "вверх", "наверх", "выше", "вверху" -> return UP
+                    "left", "влево", "налево" -> return LEFT
+                    "right", "вправо", "направо" -> return RIGHT
+                    "down", "вниз", "ниже", "внизу" -> return DOWN
+                }
+            }
+            return DOWN
         }
     }
 }
@@ -23,8 +32,12 @@ sealed class Action {
     /** Launch an app by human name ("Telegram", "настройки", "ChatGPT"). */
     data class OpenApp(val query: String) : Action()
 
-    /** Tap the on-screen element that best matches [target]. */
-    data class Tap(val target: String) : Action()
+    /**
+     * Tap an element. [nodeId] is the `#12` number from the screen listing when the planner
+     * used one — matching by number cannot pick the wrong lookalike; [target] is the text
+     * fallback for elements that are not on screen yet.
+     */
+    data class Tap(val target: String, val nodeId: Int? = null) : Action()
 
     /** Locate an element, scrolling if needed, and report whether it is there. */
     data class Find(val target: String) : Action()
@@ -58,7 +71,7 @@ sealed class Action {
 
     fun describe(): String = when (this) {
         is OpenApp -> "open_app(${query})"
-        is Tap -> "tap(${target})"
+        is Tap -> if (nodeId != null) "tap(#$nodeId ${target})" else "tap(${target})"
         is Find -> "find(${target})"
         is TypeText -> "type_text(${text}${if (target != null) " -> $target" else ""})"
         is Scroll -> "scroll(${direction.name.lowercase()} x$times)"

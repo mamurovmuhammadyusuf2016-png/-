@@ -46,11 +46,26 @@ class LayeredPlanner(
 
         return try {
             val considered = smart.plan(request)
-            if (considered.isEmpty) quick ?: considered else considered
+            if (considered.isEmpty) {
+                log("${smart.name} вернул пустой план, работаю по правилам")
+                quick ?: considered
+            } else {
+                considered
+            }
         } catch (e: Exception) {
             log("${smart.name} недоступен: ${e.message}")
-            quick ?: Plan(
-                listOf(Action.Fail("Не понял команду, и нет связи с ИИ")),
+            // Repeating the plan that just failed is not a recovery.
+            if (request.note != null) {
+                return Plan(
+                    listOf(Action.Fail("Нет связи с ИИ, а по-другому я не умею")),
+                    null,
+                    name
+                )
+            }
+            // A rule-based "не понял" hides the real cause, which is the connection.
+            val usable = quick?.takeIf { plan -> plan.actions.none { it is Action.Fail } }
+            usable ?: Plan(
+                listOf(Action.Fail("Нет связи с ИИ: ${e.message}")),
                 null,
                 name
             )

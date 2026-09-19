@@ -39,11 +39,10 @@ jobs:
       - name: Unit tests (15 scenarios + core)
         run: ./gradlew test --stacktrace
 
+      # The key is deliberately NOT passed here. This APK is published to a public
+      # release, and a key compiled into it is readable with `strings`. You paste your
+      # key into the app once, on the phone.
       - name: Build debug APK
-        env:
-          # Optional: add a repository secret named GROQ_API_KEY to bake the key into the
-          # APK. Without it the app still builds — you paste the key in the app instead.
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: ./gradlew assembleDebug --stacktrace
 
       - name: Upload test report

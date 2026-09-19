@@ -1,6 +1,8 @@
 package com.jarvis.agent.android
 
+import android.app.KeyguardManager
 import android.content.Context
+import com.jarvis.agent.BuildConfig
 import android.util.Log
 import com.jarvis.agent.core.AgentLoop
 import com.jarvis.agent.core.AgentResult
@@ -15,6 +17,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Single wiring point: settings + planner + accessibility service + speech.
@@ -56,9 +59,13 @@ object JarvisRuntime {
     @Volatile
     var speaker: Speaker? = null
 
+    private val busyFlag = AtomicBoolean(false)
+
+    val busy: Boolean get() = busyFlag.get()
+
+    /** The loop currently running, so "стоп" can stop it mid-plan. */
     @Volatile
-    var busy: Boolean = false
-        private set
+    private var activeLoop: AgentLoop? = null
 
     @Volatile
     var state: AgentState = AgentState.IDLE
@@ -113,14 +120,48 @@ object JarvisRuntime {
         return LayeredPlanner(rules, groq(), { log(it) })
     }
 
+    /**
+     * One client for the whole session, so the model that answered last is tried first next
+     * time instead of re-probing the list on every command.
+     */
+    @Volatile
+    private var cachedGroq: GroqPlanner? = null
+
+    @Volatile
+    private var cachedGroqKey: String = ""
+
+    @Synchronized
     fun groq(): GroqPlanner {
         val p = requirePrefs()
-        return GroqPlanner(
+        val signature = p.apiKey + "|" + p.model + "|" + p.baseUrl
+        val existing = cachedGroq
+        if (existing != null && cachedGroqKey == signature) return existing
+        val fresh = GroqPlanner(
             apiKeyProvider = { requirePrefs().apiKey },
             models = p.models(),
             baseUrl = p.baseUrl,
             log = { log(it) }
         )
+        cachedGroq = fresh
+        cachedGroqKey = signature
+        return fresh
+    }
+
+    /** Call after the settings change so the next command uses them. */
+    fun invalidatePlanner() {
+        cachedGroq = null
+        cachedGroqKey = ""
+    }
+
+    /** Stops the plan that is running right now. */
+    fun abort() {
+        val loop = activeLoop
+        if (loop == null) {
+            log("Нечего останавливать")
+            return
+        }
+        loop.aborted = true
+        log("Останавливаю по команде")
     }
 
     /** Asks Groq which models this key may use, and writes them into the log. */
@@ -151,12 +192,22 @@ object JarvisRuntime {
             onResult(AgentResult(AgentStatus.FAILED, "Accessibility service disabled"))
             return
         }
-        if (busy) {
-            log("Busy, command ignored: $command")
+        val keyguard = appContext?.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+        if (keyguard?.isKeyguardLocked == true) {
+            log("Телефон заблокирован — команда не выполняется")
+            speaker?.say("Телефон заблокирован, разблокируйте экран")
+            onResult(AgentResult(AgentStatus.FAILED, "Экран заблокирован"))
+            return
+        }
+        // Check-and-set on the caller's thread: otherwise two quick commands both pass and
+        // the second one runs minutes later against a screen that has nothing to do with it.
+        if (!busyFlag.compareAndSet(false, true)) {
+            log("Занят, команда пропущена: $command")
+            speaker?.say("Секунду, ещё выполняю прошлую команду")
+            onResult(AgentResult(AgentStatus.FAILED, "Агент занят"))
             return
         }
         executor.execute {
-            busy = true
             setState(AgentState.THINKING)
             try {
                 log("command: $command")
@@ -169,6 +220,7 @@ object JarvisRuntime {
                     confirmation = if (prefs.requireConfirmation) ConfirmationBus else AlwaysApprove,
                     log = { log(it) }
                 )
+                activeLoop = loop
                 val result = loop.run(command)
                 log("result: ${result.status} — ${result.message}")
                 onResult(result)
@@ -178,7 +230,8 @@ object JarvisRuntime {
                 speaker?.say("Произошла ошибка")
                 onResult(AgentResult(AgentStatus.FAILED, e.message ?: "error"))
             } finally {
-                busy = false
+                activeLoop = null
+                busyFlag.set(false)
                 settleState()
             }
         }
@@ -186,8 +239,15 @@ object JarvisRuntime {
 
     // ---------------------------------------------------------------- log
 
-    fun log(line: String) {
-        Log.d(TAG, line)
+    /** Never let an API key reach the log, the screen or logcat. */
+    private fun redact(line: String): String =
+        line.replace(Regex("gsk_[A-Za-z0-9_-]{8,}"), "gsk_***")
+
+    fun log(rawLine: String) {
+        val line = redact(rawLine)
+        // logcat is a shared, persistent buffer; command text and message bodies go through
+        // here, so only a debug build writes them out.
+        if (BuildConfig.DEBUG) Log.d(TAG, line)
         val stamped = "${timeFormat.format(Date())}  $line"
         val snapshot: List<String>
         synchronized(logLines) {

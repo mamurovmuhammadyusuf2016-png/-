@@ -17,7 +17,7 @@ interface HttpTransport {
 /** Plain HttpURLConnection — works the same on the JVM and on Android, no extra deps. */
 class UrlHttpTransport(
     private val connectTimeoutMs: Int = 15_000,
-    private val readTimeoutMs: Int = 60_000
+    private val readTimeoutMs: Int = 20_000
 ) : HttpTransport {
 
     override fun post(url: String, headers: Map<String, String>, body: String): HttpResponse =
@@ -48,9 +48,12 @@ class UrlHttpTransport(
             val text = stream?.let {
                 BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { r -> r.readText() }
             }.orEmpty()
+            // No disconnect(): that drops the socket from the keep-alive pool and makes
+            // every later call re-pay the TLS handshake.
             return HttpResponse(code, text)
-        } finally {
+        } catch (e: Exception) {
             connection.disconnect()
+            throw e
         }
     }
 }

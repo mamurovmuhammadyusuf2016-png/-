@@ -12,14 +12,14 @@ object AppMatcher {
 
     /** Extra spoken names for apps whose launcher label does not match what people say. */
     private val ALIASES: Map<String, List<String>> = mapOf(
-        "telegram" to listOf("телеграм", "телега", "тг", "tg", "telega"),
+        "telegram" to listOf("телеграм", "телеграмм", "телеграма", "телега", "тг", "tg", "telega"),
         "instagram" to listOf("инстаграм", "инста", "инстаграмм", "insta", "ig"),
         "chrome" to listOf("хром", "гугл хром", "браузер", "browser", "google chrome"),
         "chatgpt" to listOf("чатгпт", "чат гпт", "гпт", "gpt", "chat gpt", "openai", "опенай"),
         "settings" to listOf("настройки", "настройка", "параметры", "система"),
         "messages" to listOf("сообщения", "смс", "sms", "мессенджер сообщения", "messaging"),
         "whatsapp" to listOf("ватсап", "вотсап", "вацап"),
-        "youtube" to listOf("ютуб", "ютьюб"),
+        "youtube" to listOf("ютуб", "ютьюб", "ю туб", "ю тюб", "юутуб"),
         "phone" to listOf("телефон", "звонки", "dialer", "набор номера"),
         "camera" to listOf("камера", "фотоаппарат"),
         "gallery" to listOf("галерея", "фото", "photos", "снимки"),
@@ -29,6 +29,7 @@ object AppMatcher {
         "gmail" to listOf("почта", "джимейл", "mail"),
         "calendar" to listOf("календарь"),
         "play store" to listOf("плей маркет", "гугл плей", "play market", "playstore", "маркет"),
+        "google" to listOf("гугл", "гугол"),
         "spotify" to listOf("спотифай"),
         "vk" to listOf("вконтакте", "вк"),
         "tiktok" to listOf("тикток", "тик ток")
@@ -81,7 +82,14 @@ object AppMatcher {
         return if (kept.isEmpty()) Text.normalize(query) else kept.joinToString(" ")
     }
 
-    fun resolve(query: String, apps: List<AppEntry>): AppEntry? = rank(query, apps).firstOrNull()?.first
+    /** The score below which a match is a coincidence rather than an answer. */
+    const val MIN_SCORE = 74
+
+    /** The score above which we are sure enough to skip asking the model. */
+    const val CONFIDENT_SCORE = 88
+
+    fun resolve(query: String, apps: List<AppEntry>, minScore: Int = MIN_SCORE): AppEntry? =
+        rank(query, apps).firstOrNull { it.second >= minScore }?.first
 
     /** Ranked candidates, best first. Exposed so the UI/log can show why a choice was made. */
     fun rank(query: String, apps: List<AppEntry>): List<Pair<AppEntry, Int>> {
@@ -114,21 +122,30 @@ object AppMatcher {
             }
             if (q.length >= 4 && pkg.contains(qTranslit.replace(" ", ""))) score = maxOf(score, 70)
 
+            // Shared words help, but words of the query the label does not have hurt:
+            // "настройки вайфая" must not resolve to plain "Настройки".
             val qWords = q.split(' ').toSet()
             val labelWords = label.split(' ').toSet()
             val overlap = qWords.intersect(labelWords).size
-            if (overlap > 0) score = maxOf(score, 55 + overlap * 5)
+            val unmatched = (qWords - labelWords).size
+            if (overlap > 0) score = maxOf(score, 55 + overlap * 5 - unmatched * 12)
 
-            val sim = Text.similarity(qTranslit, labelTranslit)
-            if (sim >= 0.75) score = maxOf(score, (sim * 70).toInt())
+            // Fuzzy only for words long enough that one typo is not a different app.
+            if (qTranslit.length >= 5 && labelTranslit.length >= 5) {
+                val sim = Text.similarity(qTranslit, labelTranslit)
+                if (sim >= 0.85) score = maxOf(score, (sim * 70).toInt())
+            }
 
             if (score > 0) scored.add(app to score)
         }
 
-        // Prefer the shortest label among equal scores: "Chrome" beats "Chrome Beta".
+        // Prefer the label closest in length to what was asked for: "Chrome" beats
+        // "Chrome Beta" for "chrome", and "Настройки Google" beats "Настройки" for
+        // "настройки google".
+        val wanted = q.length
         return scored.sortedWith(
             compareByDescending<Pair<AppEntry, Int>> { it.second }
-                .thenBy { it.first.label.length }
+                .thenBy { kotlin.math.abs(Text.normalize(it.first.label).length - wanted) }
                 .thenBy { it.first.label }
         )
     }

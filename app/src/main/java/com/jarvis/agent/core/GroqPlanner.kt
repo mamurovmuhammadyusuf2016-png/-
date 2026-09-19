@@ -20,7 +20,7 @@ class GroqPlanner(
     private val models: List<String> = DEFAULT_MODELS,
     private val transport: HttpTransport = UrlHttpTransport(),
     private val baseUrl: String = DEFAULT_BASE_URL,
-    private val maxTokens: Int = 1024,
+    private val maxTokens: Int = 1536,
     private val log: (String) -> Unit = {}
 ) : Planner {
 
@@ -30,10 +30,14 @@ class GroqPlanner(
          * format most reliably; the llamas are the fast, always-there fallback.
          */
         val DEFAULT_MODELS = listOf(
-            "moonshotai/kimi-k2-instruct-0905",
             "openai/gpt-oss-120b",
-            "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant"
+            "openai/gpt-oss-20b"
+        )
+
+        /** Groq error codes that mean "this model, not this request". */
+        private val RETRYABLE_CODES = setOf(
+            "model_decommissioned", "model_not_found", "model_terminated",
+            "model_not_active", "json_validate_failed"
         )
 
         val DEFAULT_MODEL: String get() = DEFAULT_MODELS.first()
@@ -84,6 +88,8 @@ class GroqPlanner(
                 "model" to model,
                 "temperature" to 0,
                 "max_tokens" to maxTokens,
+                // gpt-oss bills its thinking against max_tokens; keep it out of the budget.
+                "reasoning_effort" to "low",
                 "response_format" to mapOf("type" to "json_object"),
                 "messages" to listOf(
                     mapOf("role" to "system", "content" to Prompts.SYSTEM),
@@ -94,16 +100,26 @@ class GroqPlanner(
 
         val response = transport.post(baseUrl, authHeaders(), payload)
         if (response.code !in 200..299) {
-            val detail = errorMessage(response.body).ifBlank { response.body.take(200) }
-            // 404/400 = no such model, 429 = this model is rate-limited right now.
-            if (response.code == 404 || response.code == 400 || response.code == 429) {
+            val detail = redact(errorMessage(response.body).ifBlank { response.body.take(200) })
+            val code = errorCode(response.body)
+            // 404/429/413 are about this model. A 400 is only about the model when the
+            // server says so — otherwise it is our request, and trying every other model
+            // just hides the real error behind the last one's.
+            val retryable = response.code == 404 || response.code == 429 || response.code == 413 ||
+                (response.code == 400 && (code in RETRYABLE_CODES || detail.contains(model)))
+            if (retryable) {
                 throw ModelUnavailableException(model, "модель $model недоступна (${response.code}): $detail")
             }
             throw IllegalStateException("Groq API ${response.code}: $detail")
         }
 
+        // A plan cut off by the token limit is not a plan; try a model with room.
+        if (finishReason(response.body) == "length") {
+            throw ModelUnavailableException(model, "ответ модели $model обрезан по длине")
+        }
+
         val text = extractText(response.body)
-        log("groq($model): ${text.take(300)}")
+        log("groq($model): ${redact(text.take(300))}")
         return PlanCodec.decode(text, name)
     }
 
@@ -117,7 +133,12 @@ class GroqPlanner(
 
     /** Model ids the key can actually use today — shown in the app so nobody has to guess. */
     fun listModels(): List<String> {
-        val url = baseUrl.substringBeforeLast("/chat/completions").trimEnd('/') + "/models"
+        val root = if (baseUrl.contains("/chat/completions")) {
+            baseUrl.substringBeforeLast("/chat/completions")
+        } else {
+            baseUrl.substringBeforeLast('/')
+        }
+        val url = root.trimEnd('/') + "/models"
         val response = transport.get(url, authHeaders())
         if (response.code !in 200..299) {
             throw IllegalStateException(
@@ -133,6 +154,21 @@ class GroqPlanner(
         val error = MiniJson.asObject(MiniJson.asObject(MiniJson.parseOrNull(body))["error"])
         return MiniJson.str(error["message"]).orEmpty()
     }
+
+    private fun errorCode(body: String): String {
+        val error = MiniJson.asObject(MiniJson.asObject(MiniJson.parseOrNull(body))["error"])
+        return MiniJson.str(error["code"]).orEmpty()
+    }
+
+    private fun finishReason(body: String): String {
+        val root = MiniJson.asObject(MiniJson.parseOrNull(body))
+        val first = MiniJson.asObject(MiniJson.asArray(root["choices"]).firstOrNull())
+        return MiniJson.str(first["finish_reason"]).orEmpty()
+    }
+
+    /** An echoing proxy can put our own key in its response; it must never reach the log. */
+    private fun redact(text: String): String =
+        text.replace(Regex("gsk_[A-Za-z0-9_-]{8,}"), "gsk_***")
 
     /** Pulls `choices[0].message.content` out of a chat-completions response. */
     fun extractText(body: String): String {

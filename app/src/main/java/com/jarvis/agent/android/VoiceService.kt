@@ -41,7 +41,11 @@ class VoiceService : android.app.Service() {
         const val ACTION_STOP = "com.jarvis.agent.STOP_LISTENING"
         private const val CHANNEL_ID = "jarvis_listening"
         private const val NOTIFICATION_ID = 7341
-        private const val RESTART_DELAY_MS = 600L
+        private const val RESTART_DELAY_MS = 250L
+        /** No session may last longer than this without a callback. */
+        private const val SESSION_WATCHDOG_MS = 15_000L
+        /** After a finished command, the next sentence needs no wake word. */
+        private const val FOLLOW_UP_MS = 9_000L
         private const val MAX_BACKOFF_MS = 30_000L
         /** After this many client errors in a row, say out loud what the user must fix. */
         private const val CLIENT_ERRORS_BEFORE_HINT = 4
@@ -57,26 +61,49 @@ class VoiceService : android.app.Service() {
     private var recognizer: SpeechRecognizer? = null
 
     /** True between startListening() and the matching onResults/onError. */
+    @Volatile
     private var sessionActive = false
+
+    @Volatile
     private var shuttingDown = false
+
+    @Volatile
     private var speaking = false
+
     private var consecutiveClientErrors = 0
     private var hintGiven = false
+
+    /** Until this moment the wake word is not required — see [FOLLOW_UP_MS]. */
+    private var followUpUntil = 0L
+
+    /** Fires when the recogniser accepted a session and then never called back at all. */
+    private val watchdog = Runnable {
+        if (sessionActive) {
+            JarvisRuntime.log("Распознаватель не ответил — пересоздаю")
+            sessionActive = false
+            destroyRecognizer()
+            scheduleRestart(RESTART_DELAY_MS)
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         JarvisRuntime.init(applicationContext)
+        // TTS callbacks arrive on a binder thread, and SpeechRecognizer may only be touched
+        // from the main thread — calling cancel() off-main threw, was swallowed, and left a
+        // live session behind. That leftover session is what answered ERROR_CLIENT (5).
         JarvisRuntime.speaker?.setStateListener { isSpeaking ->
-            speaking = isSpeaking
-            if (isSpeaking) {
-                // Stop listening while we talk, otherwise Jarvis transcribes itself.
-                JarvisRuntime.setState(JarvisRuntime.AgentState.SPEAKING)
-                cancelSession()
-            } else {
-                if (!JarvisRuntime.busy) JarvisRuntime.settleState()
-                scheduleRestart(RESTART_DELAY_MS)
+            main.post {
+                speaking = isSpeaking
+                if (isSpeaking) {
+                    JarvisRuntime.setState(JarvisRuntime.AgentState.SPEAKING)
+                    cancelSession()
+                } else {
+                    if (!JarvisRuntime.busy) JarvisRuntime.settleState()
+                    scheduleRestart(RESTART_DELAY_MS)
+                }
             }
         }
     }
@@ -108,6 +135,7 @@ class VoiceService : android.app.Service() {
         listening = false
         sessionActive = false
         main.removeCallbacks(restartRunnable)
+        main.removeCallbacks(watchdog)
         destroyRecognizer()
         JarvisRuntime.micLevel = 0f
         JarvisRuntime.setState(JarvisRuntime.AgentState.IDLE)
@@ -150,6 +178,7 @@ class VoiceService : android.app.Service() {
 
     private fun cancelSession() {
         main.removeCallbacks(restartRunnable)
+        main.removeCallbacks(watchdog)
         sessionActive = false
         try {
             recognizer?.cancel()
@@ -202,14 +231,21 @@ class VoiceService : android.app.Service() {
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
                 putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
+                // Google's default trailing silence is over a second; most of the "it is
+                // so slow" feeling is spent here.
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 700L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 500L)
                 if (prefs.preferOffline) {
                     putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
                 }
+
             }
 
             try {
                 sessionActive = true
                 r.startListening(intent)
+                main.removeCallbacks(watchdog)
+                main.postDelayed(watchdog, SESSION_WATCHDOG_MS)
             } catch (e: Exception) {
                 sessionActive = false
                 JarvisRuntime.log("startListening failed: ${e.message}")
@@ -267,6 +303,7 @@ class VoiceService : android.app.Service() {
 
         override fun onError(error: Int) {
             sessionActive = false
+            main.removeCallbacks(watchdog)
             JarvisRuntime.micLevel = 0f
             when (error) {
                 // The normal "nobody said anything" case — not worth a log line.
@@ -310,6 +347,7 @@ class VoiceService : android.app.Service() {
 
         override fun onResults(results: Bundle?) {
             sessionActive = false
+            main.removeCallbacks(watchdog)
             consecutiveClientErrors = 0
             JarvisRuntime.micLevel = 0f
             val texts = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
@@ -322,33 +360,48 @@ class VoiceService : android.app.Service() {
         }
     }
 
-    /** Wake word -> confirmation answer -> command. */
+    /** Confirmation answer -> cancel -> wake word -> command. */
     private fun handle(heard: String) {
         val prefs = JarvisRuntime.requirePrefs()
+        val wakeWords = prefs.wakeWords()
+        val addressed = Phrases.containsWakeWord(heard, wakeWords)
+        val withoutWake = Phrases.stripWakeWord(heard, wakeWords).trim()
 
+        val pendingToken = ConfirmationBus.currentToken
         if (ConfirmationBus.pendingQuestion != null) {
-            when {
-                Phrases.isYes(heard) -> {
-                    ConfirmationBus.answer(true)
+            // "да нет" is Russian for "no": an ambiguous reply is not an approval.
+            when (Phrases.readAnswer(withoutWake)) {
+                true -> {
+                    ConfirmationBus.answer(true, pendingToken)
                     return
                 }
-                Phrases.isNo(heard) -> {
-                    ConfirmationBus.answer(false)
+                false -> {
+                    ConfirmationBus.answer(false, pendingToken)
                     return
                 }
+                null -> Unit
             }
         }
 
-        val wakeWords = prefs.wakeWords()
-        if (prefs.requireWakeWord && !Phrases.containsWakeWord(heard, wakeWords)) {
+        // Stopping must work even while a command is running, so it is checked before busy.
+        if (Phrases.isCancel(withoutWake)) {
+            JarvisRuntime.abort()
             return
         }
-        val command = Phrases.stripWakeWord(heard, wakeWords).trim()
-        if (command.isEmpty()) {
+
+        val inFollowUp = android.os.SystemClock.uptimeMillis() < followUpUntil
+        if (prefs.requireWakeWord && !addressed && !inFollowUp) return
+
+        if (withoutWake.isEmpty()) {
+            followUpUntil = android.os.SystemClock.uptimeMillis() + FOLLOW_UP_MS
             JarvisRuntime.speaker?.say("Слушаю")
             return
         }
-        JarvisRuntime.submit(command)
+        followUpUntil = 0L
+        JarvisRuntime.submit(withoutWake) {
+            // A finished command opens a short window where no wake word is needed.
+            followUpUntil = android.os.SystemClock.uptimeMillis() + FOLLOW_UP_MS
+        }
     }
 
     // ---------------------------------------------------------------- foreground plumbing

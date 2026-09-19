@@ -11,11 +11,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Resolving "open <any app>" to a package name -->
-    <uses-permission
-        android:name="android.permission.QUERY_ALL_PACKAGES"
-        tools:ignore="QueryAllPackagesPermission" />
-
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -65,13 +60,17 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
-        <!-- Exported so that `adb shell am broadcast` can drive the test scenarios. -->
+        <!--
+          Exported so `adb shell am broadcast` can drive the test scenarios, but gated on a
+          permission only the shell holds — otherwise any installed app could make Jarvis
+          tap anything on the phone.
+        -->
         <receiver
             android:name=".android.CommandReceiver"
-            android:exported="true">
+            android:exported="true"
+            android:permission="android.permission.DUMP">
             <intent-filter>
                 <action android:name="com.jarvis.agent.COMMAND" />
-                <action android:name="com.jarvis.agent.CONFIRM" />
             </intent-filter>
         </receiver>
     </application>

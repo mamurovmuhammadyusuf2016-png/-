@@ -13,22 +13,28 @@ import com.jarvis.agent.core.Planner
 import com.jarvis.agent.core.RuleBasedPlanner
 import com.jarvis.agent.core.ScreenSnapshot
 import com.jarvis.agent.core.ScrollDirection
-import com.jarvis.agent.core.Text
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The 15 acceptance scenarios from the brief, run against a fake phone.
+ * The 15 acceptance scenarios from the brief, plus the regressions for the bug seen on a
+ * real phone, run against a fake phone.
  *
- * They exercise the real planner, the real matching and the real agent loop — only the
- * Android APIs are replaced, so a green run here means the decision-making is correct and
- * only the device plumbing is untested.
+ * The fake is deliberately unhelpful: a field keeps the text typed into it, a result row is
+ * a clickable container with a separate text child, and the chat opens only if the row
+ * itself was tapped. That is what makes these tests able to fail.
  */
 class AgentScenarioTest {
 
     private val voice = RecordingVoice()
+
+    private companion object {
+        const val TG = "org.telegram.messenger"
+        const val SEARCH = "$TG:id/search_src_text"
+        const val CHAT_INPUT = "$TG:id/chat_edit_text"
+    }
 
     private fun loop(
         phone: FakePhone,
@@ -38,8 +44,7 @@ class AgentScenarioTest {
         device = phone,
         planner = planner,
         voice = voice,
-        confirmation = gate,
-        settleMillis = 0L
+        confirmation = gate
     )
 
     private fun openApp(command: String): Pair<FakePhone, AgentResult> {
@@ -54,8 +59,8 @@ class AgentScenarioTest {
     fun scenario01_openTelegram() {
         val (phone, result) = openApp("Jarvis, открой Telegram.")
         assertEquals(AgentStatus.SUCCESS, result.status)
-        assertEquals(listOf("org.telegram.messenger"), phone.launched)
-        assertTrue("agent must answer out loud", voice.lines.isNotEmpty())
+        assertEquals(listOf(TG), phone.launched)
+        assertTrue(voice.startingWith("Открываю"))
     }
 
     @Test
@@ -78,7 +83,6 @@ class AgentScenarioTest {
         assertEquals(AgentStatus.SUCCESS, result.status)
         assertEquals(listOf("com.openai.chatgpt"), phone.launched)
 
-        // The same app, said the way people actually say it.
         val (phone2, result2) = openApp("открой чат гпт")
         assertEquals(AgentStatus.SUCCESS, result2.status)
         assertEquals(listOf("com.openai.chatgpt"), phone2.launched)
@@ -122,8 +126,9 @@ class AgentScenarioTest {
         assertEquals(listOf(ScrollDirection.DOWN), phone.scrolls)
 
         val phoneUp = FakePhone(screenProvider = { FakePhone.NOTES_SCREEN })
-        loop(phoneUp).run("пролистай вверх")
-        assertEquals(listOf(ScrollDirection.UP), phoneUp.scrolls)
+        val up = loop(phoneUp).run("пролистай немного вверх")
+        assertEquals(AgentStatus.SUCCESS, up.status)
+        assertEquals("a modifier word must not flip the direction", listOf(ScrollDirection.UP), phoneUp.scrolls)
     }
 
     @Test
@@ -133,6 +138,11 @@ class AgentScenarioTest {
 
         assertEquals(AgentStatus.SUCCESS, result.status)
         assertEquals(1, phone.backs)
+        // "прокрути назад" is a scroll, not the system Back button.
+        val phone2 = FakePhone(screenProvider = { FakePhone.NOTES_SCREEN })
+        loop(phone2).run("прокрути назад")
+        assertEquals(0, phone2.backs)
+        assertEquals(listOf(ScrollDirection.UP), phone2.scrolls)
     }
 
     @Test
@@ -141,13 +151,14 @@ class AgentScenarioTest {
         val found = loop(phone).run("найди Сохранить")
 
         assertEquals(AgentStatus.SUCCESS, found.status)
-        assertTrue(voice.contains("Нашёл"))
+        assertTrue(voice.said("Нашёл: Сохранить"))
 
-        // And the honest answer when it is not there.
         val voice2 = RecordingVoice()
         val phone2 = FakePhone(screenProvider = { FakePhone.NOTES_SCREEN })
-        AgentLoop(phone2, RuleBasedPlanner(), voice2, AlwaysApprove, settleMillis = 0L)
+        val missing = AgentLoop(phone2, RuleBasedPlanner(), voice2, AlwaysApprove)
             .run("найди кнопку оплатить счёт")
+        assertEquals("not finding something is not success", AgentStatus.FAILED, missing.status)
+        assertTrue(voice2.lines.none { it.startsWith("Нашёл:") })
         assertTrue(voice2.contains("Не нашёл"))
     }
 
@@ -170,6 +181,7 @@ class AgentScenarioTest {
                     listOf(
                         FakePhone.node(
                             0,
+                            text = p.textIn("com.android.chrome:id/url_bar"),
                             viewId = "com.android.chrome:id/url_bar",
                             desc = "Строка поиска",
                             editable = true
@@ -183,7 +195,6 @@ class AgentScenarioTest {
             Plan(
                 listOf(
                     Action.OpenApp("Chrome"),
-                    Action.Wait(100),
                     Action.Tap("поиск|search"),
                     Action.TypeText("погода в Ташкенте"),
                     Action.PressEnter,
@@ -200,90 +211,100 @@ class AgentScenarioTest {
         assertEquals(1, phone.taps.size)
         assertEquals(listOf("погода в Ташкенте"), phone.typedTexts)
         assertEquals(1, phone.enters)
-        assertTrue(voice.contains("Ищу погоду"))
+        assertTrue(voice.said("Ищу погоду в Ташкенте"))
     }
+
+    // ------------------------------------------------------------------ Telegram world
+
+    /**
+     * A Telegram that behaves like the real one: the search box keeps the query, the result
+     * row is a container plus a text child, and only tapping the row opens the chat.
+     */
+    private fun telegramWorld(
+        contact: String = "Twingo",
+        rowAppears: Boolean = true,
+        rowAfterScrolls: Int = 0,
+        chatOpens: Boolean = true,
+        searchHasViewId: Boolean = true
+    ): (FakePhone) -> ScreenSnapshot = { p ->
+        val query = if (searchHasViewId) p.textIn(SEARCH) else p.typedTexts.firstOrNull()
+        val searchOpen = query != null || p.tappedNodes.any { it.text == "Поиск" }
+        val rowTapped = p.tappedNodes.any { it.text == contact && !it.editable }
+        val matches = query != null && contact.startsWith(query, ignoreCase = true)
+        val shown = matches && rowAppears && p.scrolls.count { it == ScrollDirection.DOWN } >= rowAfterScrolls
+        val message = p.textIn(CHAT_INPUT)
+        when {
+            p.currentPackage != TG -> FakePhone.HOME_SCREEN
+            chatOpens && rowTapped -> ScreenSnapshot(TG, listOfNotNull(
+                FakePhone.node(0, text = contact),
+                FakePhone.node(1, text = message, desc = "Сообщение", viewId = CHAT_INPUT, editable = true),
+                if (message != null) FakePhone.node(2, desc = "Отправить", clickable = true) else null
+            ))
+            searchOpen -> ScreenSnapshot(TG, buildList {
+                add(
+                    FakePhone.node(
+                        0,
+                        text = query,
+                        desc = "Поиск",
+                        viewId = if (searchHasViewId) SEARCH else null,
+                        editable = true,
+                        focused = true
+                    )
+                )
+                if (shown) {
+                    add(FakePhone.node(1, clickable = true, className = "android.widget.FrameLayout"))
+                    add(FakePhone.node(2, text = contact))
+                }
+            })
+            else -> ScreenSnapshot(TG, listOf(
+                FakePhone.node(0, text = "Поиск", clickable = true),
+                FakePhone.node(1, text = "Избранное", clickable = true),
+                FakePhone.node(2, viewId = "$TG:id/chat_list", scrollable = true)
+            ))
+        }
+    }
+
+    private val sendCommand = "открой Telegram и напиши Twingo: я опоздаю на пять минут"
 
     // ------------------------------------------------------------------ 12..13 confirmation
 
-    private fun telegramPhone() = FakePhone(screenProvider = { p ->
-        when {
-            p.currentPackage != "org.telegram.messenger" -> FakePhone.HOME_SCREEN
-            p.typedTexts.size >= 2 -> telegramChat(withSendButton = true)
-            p.taps.any { it.contains("Мухаммадюсуф") } -> telegramChat(withSendButton = false)
-            p.typedTexts.isNotEmpty() -> ScreenSnapshot(
-                "org.telegram.messenger",
-                listOf(
-                    FakePhone.node(0, desc = "Поиск", viewId = "search_src_text", editable = true),
-                    FakePhone.node(1, text = "Мухаммадюсуф", clickable = true),
-                    FakePhone.node(2, text = "Мухаммад Али", clickable = true)
-                )
-            )
-            p.taps.any { Text.normalize(it) == "поиск" } -> ScreenSnapshot(
-                "org.telegram.messenger",
-                listOf(FakePhone.node(0, desc = "Поиск", viewId = "search_src_text", editable = true))
-            )
-            else -> ScreenSnapshot(
-                "org.telegram.messenger",
-                listOf(
-                    FakePhone.node(0, text = "Поиск", clickable = true),
-                    FakePhone.node(1, text = "Избранное", clickable = true),
-                    FakePhone.node(2, viewId = "chat_list", scrollable = true)
-                )
-            )
-        }
-    })
-
-    private fun telegramChat(withSendButton: Boolean) = ScreenSnapshot(
-        "org.telegram.messenger",
-        listOfNotNull(
-            FakePhone.node(0, text = "Мухаммадюсуф"),
-            FakePhone.node(1, desc = "Сообщение", viewId = "chat_edit_text", editable = true),
-            if (withSendButton) FakePhone.node(2, desc = "Отправить", clickable = true) else null
-        )
-    )
-
-    private val sendCommand =
-        "открой Telegram и напиши Мухаммадюсуфу: я опоздаю на пять минут"
-
     @Test
     fun scenario12_sendTelegramMessageWithConfirmation() {
-        val phone = telegramPhone()
+        val phone = FakePhone(screenProvider = telegramWorld())
         val gate = RecordingGate(approve = true)
 
         val result = loop(phone, RuleBasedPlanner(), gate).run(sendCommand)
 
         assertEquals(AgentStatus.SUCCESS, result.status)
-        assertEquals(listOf("org.telegram.messenger"), phone.launched)
+        assertEquals(listOf(TG), phone.launched)
+        assertEquals(listOf("Поиск", "Twingo", "Отправить"), phone.taps)
+        // The name into the search box, the message into the chat input — by identity.
+        assertEquals(listOf(SEARCH, CHAT_INPUT), phone.typedNodes.map { it.viewId })
+        assertEquals("the search query must survive", "Twingo", phone.textIn(SEARCH))
+        assertEquals("я опоздаю на пять минут", phone.textIn(CHAT_INPUT))
         assertEquals(1, gate.questions.size)
-        assertTrue(
-            "the confirmation must quote the message",
-            gate.questions.first().contains("я опоздаю на пять минут")
-        )
-        assertEquals(
-            listOf("Мухаммадюсуфу", "я опоздаю на пять минут"),
-            phone.typedTexts
-        )
-        assertEquals("Отправить", phone.taps.last())
+        assertTrue(gate.questions.first().contains("я опоздаю на пять минут"))
         assertTrue(voice.contains("отправлено"))
     }
 
     @Test
     fun scenario13_cancelAction() {
-        val phone = telegramPhone()
+        val phone = FakePhone(screenProvider = telegramWorld())
         val gate = RecordingGate(approve = false)
 
         val result = loop(phone, RuleBasedPlanner(), gate).run(sendCommand)
 
         assertEquals(AgentStatus.CANCELLED, result.status)
+        // Everything up to the question really happened...
+        assertEquals(listOf("Поиск", "Twingo"), phone.taps)
+        assertEquals("я опоздаю на пять минут", phone.textIn(CHAT_INPUT))
+        // ...and the send did not.
         assertEquals(1, gate.questions.size)
-        assertFalse("nothing may be sent after a refusal", phone.taps.contains("Отправить"))
-        assertTrue(voice.contains("Отменено"))
+        assertEquals("Отменено", voice.lines.last())
 
-        // A plain "отмена" is also a cancel, before anything happens at all.
         val voice2 = RecordingVoice()
         val phone2 = FakePhone()
-        val cancelled = AgentLoop(phone2, RuleBasedPlanner(), voice2, gate, settleMillis = 0L)
-            .run("Jarvis, отмена")
+        val cancelled = AgentLoop(phone2, RuleBasedPlanner(), voice2, gate).run("Jarvis, отмена")
         assertEquals(AgentStatus.CANCELLED, cancelled.status)
         assertTrue(phone2.launched.isEmpty())
     }
@@ -304,7 +325,10 @@ class AgentScenarioTest {
         val apiBody = MiniJson.stringify(
             mapOf(
                 "choices" to listOf(
-                    mapOf("message" to mapOf("role" to "assistant", "content" to planJson))
+                    mapOf(
+                        "finish_reason" to "stop",
+                        "message" to mapOf("role" to "assistant", "content" to planJson)
+                    )
                 )
             )
         )
@@ -312,26 +336,19 @@ class AgentScenarioTest {
         val planner = GroqPlanner(
             apiKeyProvider = { "test-key" },
             transport = transport,
-            baseUrl = "https://example.invalid/chat"
+            baseUrl = "https://example.invalid/v1/chat/completions"
         )
 
         val phone = FakePhone()
-        // Exactly the path a spoken command takes: heard text -> Groq -> action -> speech.
         val result = loop(phone, planner).run("Jarvis, открой инстаграм")
 
         assertEquals(AgentStatus.SUCCESS, result.status)
         assertEquals(1, transport.requests.size)
-        assertTrue(
-            "the command must reach the model",
-            transport.requests.first().contains("открой инстаграм")
-        )
-        assertEquals(
-            "Bearer test-key",
-            transport.headers.first()["Authorization"]
-        )
+        assertTrue(transport.requests.first().contains("открой инстаграм"))
+        assertEquals("Bearer test-key", transport.headers.first()["Authorization"])
         assertEquals(listOf("com.instagram.android"), phone.launched)
-        assertTrue(voice.contains("Открываю Instagram"))
-        assertTrue(voice.contains("Instagram открыт"))
+        assertTrue(voice.said("Открываю Instagram"))
+        assertTrue(voice.said("Instagram открыт"))
     }
 
     // ------------------------------------------------------------------ 15 recovery
@@ -347,13 +364,155 @@ class AgentScenarioTest {
         val result = loop(phone, planner).run("нажми кнопку которой нет")
 
         assertEquals(AgentStatus.FAILED, result.status)
-        // It scrolled looking for the element before giving up...
-        assertEquals(3, phone.scrolls.size)
+        // It scrolled looking for the element, then put the list back where it was...
+        assertEquals(3, phone.scrolls.count { it == ScrollDirection.DOWN })
+        assertEquals(3, phone.scrolls.count { it == ScrollDirection.UP })
         // ...then asked the planner again, telling it what went wrong...
         assertEquals(2, planner.requests.size)
         assertTrue(planner.requests[1].note!!.contains("Кнопка которой нет"))
         // ...and told the user instead of failing silently.
-        assertTrue(voice.contains("Не вижу такую кнопку"))
+        assertTrue(voice.said("Не вижу такую кнопку, скажите иначе"))
         assertEquals(1, result.replans)
+    }
+
+    // ------------------------------------------------------------------ regressions
+
+    @Test
+    fun regression_theMessageNeverGoesBackIntoTheSearchBox() {
+        // The reported bug: the agent typed the contact name into search, then deleted it
+        // and typed the message there. Reachable only when the field keeps its text.
+        val phone = FakePhone(screenProvider = telegramWorld(chatOpens = false))
+        val gate = RecordingGate(approve = true)
+
+        val result = loop(phone, RuleBasedPlanner(), gate).run(sendCommand)
+
+        assertEquals(AgentStatus.FAILED, result.status)
+        assertEquals("only the recipient was ever typed", listOf("Twingo"), phone.typedTexts)
+        assertEquals("Twingo", phone.textIn(SEARCH))
+        assertTrue("nothing may be sent", phone.taps.none { it == "Отправить" })
+        assertTrue("and nothing may be confirmed", gate.questions.isEmpty())
+    }
+
+    @Test
+    fun regression_anUntargetedTypeTextDoesNotReuseTheFieldItJustFilled() {
+        // Exactly the shape a model emits: type_text with no "target".
+        val phone = FakePhone(screenProvider = telegramWorld(chatOpens = false))
+        val planner = ScriptedPlanner(
+            Plan(
+                listOf(
+                    Action.OpenApp("Telegram"),
+                    Action.Tap("Поиск"),
+                    Action.TypeText("Twingo"),
+                    Action.Tap("Twingo"),
+                    Action.TypeText("я опоздаю на пять минут"),
+                    Action.Confirm("Отправить?"),
+                    Action.Tap("отправить|send"),
+                    Action.Done("Отправлено")
+                ),
+                say = "Пишу Twingo",
+                source = "llm"
+            ),
+            Plan(listOf(Action.Fail("Чат не открылся")))
+        )
+
+        val result = loop(phone, planner).run(sendCommand)
+
+        assertEquals("the search query must never be overwritten", "Twingo", phone.textIn(SEARCH))
+        assertEquals(AgentStatus.FAILED, result.status)
+    }
+
+    @Test
+    fun regression_aFieldWithoutAViewIdIsStillNotATapTarget() {
+        // No viewId means the key falls back to class+position, which the keyboard can move.
+        val phone = FakePhone(screenProvider = telegramWorld(searchHasViewId = false))
+        val result = loop(phone, RuleBasedPlanner(), RecordingGate(approve = true)).run(sendCommand)
+
+        assertEquals(AgentStatus.SUCCESS, result.status)
+        assertTrue("the row, not the field", phone.tappedNodes.none { it.editable })
+    }
+
+    @Test
+    fun regression_aTapThePhoneRefusesIsNotSuccess() {
+        val phone = FakePhone(screenProvider = { FakePhone.NOTES_SCREEN })
+        phone.tapResult = { false }
+        val planner = ScriptedPlanner(
+            Plan(listOf(Action.Tap("Сохранить"), Action.Done("ок"))),
+            Plan(listOf(Action.Fail("Кнопка не нажимается")))
+        )
+
+        val result = loop(phone, planner).run("нажми сохранить")
+
+        assertEquals(AgentStatus.FAILED, result.status)
+        assertEquals(1, result.replans)
+        assertTrue(voice.said("Кнопка не нажимается"))
+    }
+
+    @Test
+    fun regression_aContactBelowTheFoldIsFoundByScrolling() {
+        val phone = FakePhone(screenProvider = telegramWorld(rowAfterScrolls = 2))
+        val result = loop(phone, RuleBasedPlanner(), RecordingGate(approve = true)).run(sendCommand)
+
+        assertEquals(AgentStatus.SUCCESS, result.status)
+        assertEquals(2, phone.scrolls.count { it == ScrollDirection.DOWN })
+        assertEquals(0, result.replans)
+    }
+
+    @Test
+    fun regression_silenceOnAConfirmationIsARefusal() {
+        val phone = FakePhone(screenProvider = telegramWorld())
+        val gate = SilentGate()
+
+        val result = loop(phone, RuleBasedPlanner(), gate).run(sendCommand)
+
+        assertEquals(AgentStatus.CANCELLED, result.status)
+        assertEquals(1, gate.questions.size)
+        assertTrue(phone.taps.none { it == "Отправить" })
+    }
+
+    @Test
+    fun regression_anAppAlreadyInFrontIsNotRelaunched() {
+        val phone = FakePhone(screenProvider = { FakePhone.HOME_SCREEN })
+        phone.currentPackage = TG
+        val result = loop(phone).run("открой телеграм")
+
+        assertEquals(AgentStatus.SUCCESS, result.status)
+        assertTrue("no relaunch, and no waiting for a screen that will not change",
+            phone.launched.isEmpty())
+        assertTrue(phone.sleptMillis < 1000L)
+    }
+
+    @Test
+    fun regression_twoCommandsInARowDoNotLeakTheLastUsedField() {
+        val phone = FakePhone(screenProvider = { FakePhone.NOTES_SCREEN })
+        val typing = Plan(listOf(Action.TypeText("раз", "заметка"), Action.Done("ок")))
+        val agent = loop(phone, ScriptedPlanner(typing))
+
+        assertEquals(AgentStatus.SUCCESS, agent.run("напечатай раз").status)
+        assertEquals(AgentStatus.SUCCESS, agent.run("напечатай раз").status)
+        assertEquals(listOf("раз", "раз"), phone.typedTexts)
+        assertEquals(listOf("Заметка", "Заметка"), phone.typedInto)
+    }
+
+    @Test
+    fun regression_theAgentStillWorksWhenTheModelIsDown() {
+        val phone = FakePhone()
+        val planner = com.jarvis.agent.core.LayeredPlanner(RuleBasedPlanner(), ExplodingPlanner("groq"))
+        val result = loop(phone, planner).run("Jarvis, открой Telegram")
+
+        assertEquals(AgentStatus.SUCCESS, result.status)
+        assertEquals(listOf(TG), phone.launched)
+    }
+
+    @Test
+    fun regression_aRepeatedPlanIsNotRetriedForever() {
+        val phone = FakePhone(screenProvider = { FakePhone.NOTES_SCREEN })
+        val sameEveryTime = Plan(listOf(Action.Tap("Нет такого"), Action.Done("ок")))
+        val planner = ScriptedPlanner(sameEveryTime, sameEveryTime, sameEveryTime)
+
+        val result = loop(phone, planner).run("нажми нет такого")
+
+        assertEquals(AgentStatus.FAILED, result.status)
+        assertEquals("one replan, then stop repeating itself", 1, result.replans)
+        assertFalse(voice.lines.isEmpty())
     }
 }

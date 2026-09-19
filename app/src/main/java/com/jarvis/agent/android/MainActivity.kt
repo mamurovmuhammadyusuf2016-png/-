@@ -61,10 +61,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private val confirmationListener = ConfirmationBus.Listener { question ->
+    private val confirmationListener = ConfirmationBus.Listener { question, token ->
         main.post {
             if (isFinishing || isDestroyed) return@post
-            showConfirmation(question)
+            showConfirmation(question, token)
         }
     }
 
@@ -263,20 +263,22 @@ class MainActivity : AppCompatActivity() {
         p.requireConfirmation = confirmationCheck.isChecked
         p.preferOffline = offlineCheck.isChecked
         JarvisRuntime.speaker?.setLanguage(p.language)
+        JarvisRuntime.invalidatePlanner()
     }
 
-    private fun showConfirmation(question: String?) {
+    private fun showConfirmation(question: String?, token: Long) {
         if (question == null) {
             dialog?.dismiss()
             dialog = null
             return
         }
+        if (isFinishing || isDestroyed) return
         if (dialog?.isShowing == true) return
         dialog = AlertDialog.Builder(this)
             .setTitle("Подтверждение")
             .setMessage(question)
-            .setPositiveButton("Да") { _, _ -> ConfirmationBus.answer(true) }
-            .setNegativeButton("Отмена") { _, _ -> ConfirmationBus.answer(false) }
+            .setPositiveButton("Да") { _, _ -> ConfirmationBus.answer(true, token) }
+            .setNegativeButton("Отмена") { _, _ -> ConfirmationBus.answer(false, token) }
             .setCancelable(false)
             .show()
     }

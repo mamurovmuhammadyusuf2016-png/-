@@ -50,6 +50,39 @@ object Text {
         return prev[b.length]
     }
 
+    /**
+     * Icon-only buttons carry no text at all — a send arrow is literally "➤". Normalising
+     * that gives an empty string and the element becomes unmatchable, which is how the agent
+     * ended up tapping a message bubble instead of Send. Give the common glyphs words.
+     */
+    private val GLYPHS: Map<Char, String> = mapOf(
+        '➤' to "send отправить", '➢' to "send отправить", '▶' to "send отправить",
+        '→' to "send отправить далее", '⇧' to "send отправить", '↑' to "send отправить",
+        '✓' to "ok готово подтвердить", '✔' to "ok готово подтвердить",
+        '✕' to "close закрыть", '✖' to "close закрыть", '×' to "close закрыть",
+        '⋮' to "menu меню ещё", '⋯' to "menu меню ещё", '≡' to "menu меню",
+        '☰' to "menu меню", '←' to "back назад", '‹' to "back назад",
+        '+' to "add добавить новый", '🔍' to "search поиск", '🔎' to "search поиск",
+        '⚙' to "settings настройки", '🏠' to "home домой"
+    )
+
+    /** Words for any glyphs in [raw], or an empty string when there are none. */
+    fun glyphWords(raw: String?): String {
+        if (raw.isNullOrEmpty() || raw.length > 4) return ""
+        val words = raw.mapNotNull { GLYPHS[it] }
+        return words.joinToString(" ")
+    }
+
+    /**
+     * Drops one trailing Russian vowel so a dative recipient meets the nominative contact:
+     * "Ане" and "Аня" both become "Ан", "Ольге" and "Ольга" both become "Ольг".
+     */
+    fun stem(raw: String): String {
+        if (raw.length < 3) return raw
+        val last = raw.last()
+        return if (last in "аеиоуыэюяaeiouy") raw.dropLast(1) else raw
+    }
+
     /** Very small Cyrillic -> Latin transliteration so "телеграм" can meet "telegram". */
     fun translit(raw: String): String {
         val map = mapOf(

@@ -9,25 +9,25 @@ import android.content.Intent
  * README are run:
  *
  *   adb shell am broadcast -a com.jarvis.agent.COMMAND --es text "открой Telegram"
- *   adb shell am broadcast -a com.jarvis.agent.CONFIRM --ez approve true
+ *
+ * The receiver is declared with `android:permission="android.permission.DUMP"`, which the
+ * adb shell holds and an installed app cannot obtain. Without that, any app on the phone
+ * could make Jarvis tap anything.
+ *
+ * There is deliberately no broadcast that answers a confirmation: a remotely settable "yes"
+ * to a safety prompt has no legitimate use.
  */
 class CommandReceiver : BroadcastReceiver() {
 
     companion object {
         const val ACTION_COMMAND = "com.jarvis.agent.COMMAND"
-        const val ACTION_CONFIRM = "com.jarvis.agent.CONFIRM"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
         JarvisRuntime.init(context.applicationContext)
-        when (intent.action) {
-            ACTION_COMMAND -> {
-                val text = intent.getStringExtra("text").orEmpty()
-                if (text.isNotBlank()) JarvisRuntime.submit(text)
-            }
-            ACTION_CONFIRM -> {
-                ConfirmationBus.answer(intent.getBooleanExtra("approve", false))
-            }
+        if (intent.action == ACTION_COMMAND) {
+            val text = intent.getStringExtra("text").orEmpty()
+            if (text.isNotBlank()) JarvisRuntime.submit(text)
         }
     }
 }
