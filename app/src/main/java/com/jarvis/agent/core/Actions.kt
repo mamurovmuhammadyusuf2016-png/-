@@ -10,10 +10,10 @@ enum class ScrollDirection { DOWN, UP, LEFT, RIGHT;
         fun parse(raw: String?): ScrollDirection {
             for (word in Text.tokens(raw)) {
                 when (word) {
-                    "up", "вверх", "наверх", "выше", "вверху" -> return UP
+                    "up", "вверх", "наверх", "выше", "вверху", "назад", "обратно" -> return UP
                     "left", "влево", "налево" -> return LEFT
                     "right", "вправо", "направо" -> return RIGHT
-                    "down", "вниз", "ниже", "внизу" -> return DOWN
+                    "down", "вниз", "ниже", "внизу", "вперед", "дальше" -> return DOWN
                 }
             }
             return DOWN

@@ -385,8 +385,10 @@ class AgentLoop(
      */
     private fun pickField(screen: ScreenSnapshot, hint: String?): ScreenNode? {
         val used = setOfNotNull(lastTypedKey)
+        val typed = Text.normalize(lastTypedText)
         val fresh = ScreenMatcher.findEditable(screen, hint, excludeKeys = used)
-        if (fresh != null && Text.normalize(fresh.text) != Text.normalize(lastTypedText)) {
+        // Reject it only when it is literally holding the text we just entered.
+        if (fresh != null && (typed.isEmpty() || Text.normalize(fresh.text) != typed)) {
             return fresh
         }
         // Nothing new appeared. A plan that named a field meant a different field.
