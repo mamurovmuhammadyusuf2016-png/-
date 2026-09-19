@@ -61,8 +61,13 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
+      # A direct download link, so the APK can be fetched on the phone without
+      # signing in to GitHub (Actions artifacts require a login).
       - name: Publish rolling "latest" release
-        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: >
+          github.event_name == 'push' &&
+          (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ||
+           github.ref == 'refs/heads/claude/jarvis-voice-android-agent-rhlvqo')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
