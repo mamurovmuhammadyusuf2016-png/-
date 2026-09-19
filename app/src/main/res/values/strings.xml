@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Jarvis</string>
+    <string name="accessibility_label">Jarvis Agent</string>
+    <string name="accessibility_description">Позволяет Jarvis видеть экран и нажимать кнопки вместо вас — так же, как это делает человек.</string>
+</resources>

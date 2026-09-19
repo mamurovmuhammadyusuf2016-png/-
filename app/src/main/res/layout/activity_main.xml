@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Jarvis"
+            android:textSize="28sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:lineSpacingExtra="4dp"
+            android:textSize="15sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="1. Разрешения"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/grantPermissions"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Дать доступ к микрофону" />
+
+        <Button
+            android:id="@+id/openAccessibility"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Включить Accessibility Service" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="2. Настройки"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/apiKey"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autofillHints=""
+            android:hint="ANTHROPIC_API_KEY (можно оставить пустым)"
+            android:inputType="textPassword" />
+
+        <EditText
+            android:id="@+id/model"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autofillHints=""
+            android:hint="Модель"
+            android:inputType="text" />
+
+        <EditText
+            android:id="@+id/baseUrl"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autofillHints=""
+            android:hint="API URL (или адрес своего прокси)"
+            android:inputType="textUri" />
+
+        <EditText
+            android:id="@+id/wakeWord"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autofillHints=""
+            android:hint="Слово активации"
+            android:inputType="text" />
+
+        <EditText
+            android:id="@+id/language"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autofillHints=""
+            android:hint="Язык распознавания (ru-RU / en-US)"
+            android:inputType="text" />
+
+        <CheckBox
+            android:id="@+id/requireWake"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Требовать слово активации" />
+
+        <Button
+            android:id="@+id/saveSettings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Сохранить" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="3. Запуск"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/startListening"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Начать слушать" />
+
+        <Button
+            android:id="@+id/stopListening"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Остановить" />
+
+        <EditText
+            android:id="@+id/command"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:autofillHints=""
+            android:hint="Команда текстом, например: открой Telegram"
+            android:inputType="text" />
+
+        <Button
+            android:id="@+id/runCommand"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Выполнить команду" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Журнал"
+            android:textStyle="bold" />
+
+        <ScrollView
+            android:id="@+id/logScroll"
+            android:layout_width="match_parent"
+            android:layout_height="260dp"
+            android:layout_marginTop="4dp">
+
+            <TextView
+                android:id="@+id/log"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textSize="11sp" />
+        </ScrollView>
+    </LinearLayout>
+</ScrollView>
