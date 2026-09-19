@@ -78,12 +78,13 @@ sealed class Action {
 data class Plan(
     val actions: List<Action>,
     val say: String? = null,
-    val source: String = "unknown"
+    val source: String = "unknown",
+    /**
+     * True when the planner is sure enough that asking the model would only add latency.
+     * The offline planner sets it for the commands it recognises exactly ("открой Chrome");
+     * anything it merely guessed at is left false so the model gets a say.
+     */
+    val confident: Boolean = false
 ) {
     val isEmpty: Boolean get() = actions.isEmpty()
-
-    companion object {
-        fun of(vararg actions: Action, say: String? = null, source: String = "rules"): Plan =
-            Plan(actions.toList(), say, source)
-    }
 }

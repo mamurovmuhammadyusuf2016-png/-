@@ -15,22 +15,45 @@ interface Planner {
     fun plan(request: PlanRequest): Plan
 }
 
-/** Tries [primary] and silently falls back to [fallback] when it fails or returns nothing. */
-class FallbackPlanner(
-    private val primary: Planner,
-    private val fallback: Planner,
-    private val onError: (String) -> Unit = {}
+/**
+ * Fast path first, model second.
+ *
+ * "Открой Telegram" is unambiguous — answering it locally makes it instant instead of
+ * waiting on a network round trip. Anything the fast planner is not sure about, and every
+ * re-plan after a failure, goes to the model; if the model is unreachable we still fall
+ * back to whatever the fast planner came up with.
+ */
+class LayeredPlanner(
+    private val fast: Planner,
+    private val smart: Planner,
+    private val log: (String) -> Unit = {}
 ) : Planner {
-    override val name: String get() = "${primary.name}+${fallback.name}"
+
+    override val name: String get() = "${fast.name}+${smart.name}"
 
     override fun plan(request: PlanRequest): Plan {
-        try {
-            val plan = primary.plan(request)
-            if (!plan.isEmpty) return plan
-            onError("${primary.name} returned an empty plan, using ${fallback.name}")
+        val quick = try {
+            fast.plan(request)
         } catch (e: Exception) {
-            onError("${primary.name} failed: ${e.message}")
+            log("${fast.name} failed: ${e.message}")
+            null
         }
-        return fallback.plan(request)
+
+        // A re-plan means the obvious answer already failed — always think harder.
+        if (request.note == null && quick != null && quick.confident && !quick.isEmpty) {
+            return quick
+        }
+
+        return try {
+            val considered = smart.plan(request)
+            if (considered.isEmpty) quick ?: considered else considered
+        } catch (e: Exception) {
+            log("${smart.name} недоступен: ${e.message}")
+            quick ?: Plan(
+                listOf(Action.Fail("Не понял команду, и нет связи с ИИ")),
+                null,
+                name
+            )
+        }
     }
 }

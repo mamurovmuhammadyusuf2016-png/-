@@ -1,167 +1,317 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/jarvis_bg"
     android:fillViewport="true"
-    android:padding="16dp">
+    android:scrollbars="none">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical">
+        android:orientation="vertical"
+        android:paddingStart="20dp"
+        android:paddingTop="24dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="28dp">
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Jarvis"
-            android:textSize="28sp"
+            android:gravity="center"
+            android:letterSpacing="0.45"
+            android:text="JARVIS"
+            android:textColor="@color/jarvis_accent"
+            android:textSize="22sp"
             android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:letterSpacing="0.1"
+            android:text="голосовой агент устройства"
+            android:textColor="@color/jarvis_muted"
+            android:textSize="11sp" />
+
+        <com.jarvis.agent.android.ReactorView
+            android:id="@+id/reactor"
+            android:layout_width="match_parent"
+            android:layout_height="240dp"
+            android:layout_marginTop="10dp" />
+
+        <TextView
+            android:id="@+id/stateLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:letterSpacing="0.22"
+            android:text="ОЖИДАНИЕ"
+            android:textColor="@color/jarvis_text"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/stateHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:gravity="center"
+            android:text="Нажмите «Начать слушать»"
+            android:textColor="@color/jarvis_muted"
+            android:textSize="12sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/primaryAction"
+            android:layout_width="match_parent"
+            android:layout_height="58dp"
+            android:layout_marginTop="18dp"
+            android:text="Начать слушать"
+            android:textAllCaps="false"
+            android:textColor="@color/jarvis_accent"
+            android:textSize="16sp"
+            app:backgroundTint="@color/jarvis_accent_fill"
+            app:cornerRadius="29dp"
+            app:strokeColor="@color/jarvis_accent"
+            app:strokeWidth="1dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/command"
+                style="@style/JarvisInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="0dp"
+                android:layout_weight="1"
+                android:autofillHints=""
+                android:hint="Команда текстом…"
+                android:imeOptions="actionSend"
+                android:inputType="text"
+                android:maxLines="1" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/runCommand"
+                android:layout_width="56dp"
+                android:layout_height="48dp"
+                android:layout_marginStart="8dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:text="→"
+                android:textColor="@color/jarvis_accent"
+                android:textSize="18sp"
+                app:backgroundTint="@color/jarvis_accent_fill"
+                app:cornerRadius="14dp"
+                app:strokeColor="@color/jarvis_accent"
+                app:strokeWidth="1dp" />
+        </LinearLayout>
+
+        <!-- Readiness checklist -->
+        <TextView style="@style/JarvisLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="СОСТОЯНИЕ" />
 
         <TextView
             android:id="@+id/status"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:lineSpacingExtra="4dp"
-            android:textSize="15sp" />
+            android:background="@drawable/bg_card"
+            android:lineSpacingExtra="6dp"
+            android:padding="16dp"
+            android:textColor="@color/jarvis_text"
+            android:textSize="13sp" />
 
-        <TextView
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="1. Разрешения"
-            android:textStyle="bold" />
+            android:layout_marginTop="10dp"
+            android:orientation="horizontal">
 
-        <Button
-            android:id="@+id/grantPermissions"
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/grantPermissions"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Микрофон"
+                android:textAllCaps="false"
+                android:textColor="@color/jarvis_text"
+                app:cornerRadius="14dp"
+                app:strokeColor="@color/jarvis_stroke" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/openAccessibility"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:text="Accessibility"
+                android:textAllCaps="false"
+                android:textColor="@color/jarvis_text"
+                app:cornerRadius="14dp"
+                app:strokeColor="@color/jarvis_stroke" />
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/toggleSettings"
+            style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Дать доступ к микрофону" />
+            android:layout_marginTop="14dp"
+            android:text="Настройки"
+            android:textAllCaps="false"
+            android:textColor="@color/jarvis_muted" />
 
-        <Button
-            android:id="@+id/openAccessibility"
+        <!-- Settings, hidden by default -->
+        <LinearLayout
+            android:id="@+id/settingsPanel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Включить Accessibility Service" />
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:visibility="gone">
 
-        <TextView
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:text="GROQ_API_KEY"
+                android:textColor="@color/jarvis_muted"
+                android:textSize="11sp"
+                android:letterSpacing="0.15"
+                android:textStyle="bold" />
+
+            <EditText
+                android:id="@+id/apiKey"
+                style="@style/JarvisInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:autofillHints=""
+                android:hint="gsk_…"
+                android:inputType="textPassword" />
+
+            <EditText
+                android:id="@+id/model"
+                style="@style/JarvisInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:autofillHints=""
+                android:hint="Модели через запятую, по приоритету"
+                android:inputType="text" />
+
+            <EditText
+                android:id="@+id/baseUrl"
+                style="@style/JarvisInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:autofillHints=""
+                android:hint="API URL или адрес своего прокси"
+                android:inputType="textUri" />
+
+            <EditText
+                android:id="@+id/wakeWord"
+                style="@style/JarvisInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:autofillHints=""
+                android:hint="Слово активации"
+                android:inputType="text" />
+
+            <EditText
+                android:id="@+id/language"
+                style="@style/JarvisInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:autofillHints=""
+                android:hint="Язык: ru-RU / en-US"
+                android:inputType="text" />
+
+            <CheckBox
+                android:id="@+id/requireWake"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Требовать слово активации"
+                android:textColor="@color/jarvis_text"
+                android:textSize="13sp" />
+
+            <CheckBox
+                android:id="@+id/requireConfirmation"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Спрашивать перед отправкой и удалением"
+                android:textColor="@color/jarvis_text"
+                android:textSize="13sp" />
+
+            <CheckBox
+                android:id="@+id/preferOffline"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Офлайн-распознавание речи"
+                android:textColor="@color/jarvis_text"
+                android:textSize="13sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/saveSettings"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Сохранить"
+                    android:textAllCaps="false"
+                    android:textColor="@color/jarvis_accent"
+                    app:backgroundTint="@color/jarvis_accent_fill"
+                    app:cornerRadius="14dp"
+                    app:strokeColor="@color/jarvis_accent"
+                    app:strokeWidth="1dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/checkModels"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:text="Какие модели есть"
+                    android:textAllCaps="false"
+                    android:textColor="@color/jarvis_text"
+                    app:cornerRadius="14dp"
+                    app:strokeColor="@color/jarvis_stroke" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <TextView style="@style/JarvisLabel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="2. Настройки"
-            android:textStyle="bold" />
-
-        <EditText
-            android:id="@+id/apiKey"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:autofillHints=""
-            android:hint="ANTHROPIC_API_KEY (можно оставить пустым)"
-            android:inputType="textPassword" />
-
-        <EditText
-            android:id="@+id/model"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:autofillHints=""
-            android:hint="Модель"
-            android:inputType="text" />
-
-        <EditText
-            android:id="@+id/baseUrl"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:autofillHints=""
-            android:hint="API URL (или адрес своего прокси)"
-            android:inputType="textUri" />
-
-        <EditText
-            android:id="@+id/wakeWord"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:autofillHints=""
-            android:hint="Слово активации"
-            android:inputType="text" />
-
-        <EditText
-            android:id="@+id/language"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:autofillHints=""
-            android:hint="Язык распознавания (ru-RU / en-US)"
-            android:inputType="text" />
-
-        <CheckBox
-            android:id="@+id/requireWake"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Требовать слово активации" />
-
-        <CheckBox
-            android:id="@+id/preferOffline"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Офлайн-распознавание (если онлайн не работает)" />
-
-        <Button
-            android:id="@+id/saveSettings"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Сохранить" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="3. Запуск"
-            android:textStyle="bold" />
-
-        <Button
-            android:id="@+id/startListening"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Начать слушать" />
-
-        <Button
-            android:id="@+id/stopListening"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Остановить" />
-
-        <EditText
-            android:id="@+id/command"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:autofillHints=""
-            android:hint="Команда текстом, например: открой Telegram"
-            android:inputType="text" />
-
-        <Button
-            android:id="@+id/runCommand"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Выполнить команду" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="Журнал"
-            android:textStyle="bold" />
+            android:text="ЖУРНАЛ" />
 
         <ScrollView
             android:id="@+id/logScroll"
             android:layout_width="match_parent"
-            android:layout_height="260dp"
-            android:layout_marginTop="4dp">
+            android:layout_height="240dp"
+            android:background="@drawable/bg_console"
+            android:padding="12dp"
+            android:scrollbars="none">
 
             <TextView
                 android:id="@+id/log"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:fontFamily="monospace"
-                android:textSize="11sp" />
+                android:textColor="@color/jarvis_muted"
+                android:textSize="10sp" />
         </ScrollView>
     </LinearLayout>
 </ScrollView>

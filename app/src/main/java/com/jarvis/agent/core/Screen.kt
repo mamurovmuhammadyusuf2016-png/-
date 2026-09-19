@@ -28,6 +28,13 @@ data class ScreenNode(
             .joinToString(" ")
 
     fun label(): String = text ?: contentDescription ?: viewId?.substringAfterLast('/') ?: (className ?: "view")
+
+    /**
+     * Stable-enough identity across two snapshots of the same screen. Used to remember
+     * "this is the field I just typed into" so the next tap does not land back on it.
+     */
+    val key: String
+        get() = viewId ?: "${className ?: "view"}@${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}"
 }
 
 data class ScreenSnapshot(
@@ -74,8 +81,14 @@ object ScreenMatcher {
         "field", "write", "напиши", "введи", "edit"
     )
 
-    fun find(snapshot: ScreenSnapshot, target: String, requireClickable: Boolean = false): ScreenNode? =
-        rank(snapshot, target, requireClickable).firstOrNull()?.first
+    fun find(
+        snapshot: ScreenSnapshot,
+        target: String,
+        requireClickable: Boolean = false,
+        excludeKeys: Set<String> = emptySet(),
+        penalizeEditable: Boolean = false
+    ): ScreenNode? = rank(snapshot, target, requireClickable, excludeKeys, penalizeEditable)
+        .firstOrNull()?.first
 
     /**
      * Ranks nodes against [target]. The target may list alternatives separated by `|`
@@ -85,7 +98,9 @@ object ScreenMatcher {
     fun rank(
         snapshot: ScreenSnapshot,
         target: String,
-        requireClickable: Boolean = false
+        requireClickable: Boolean = false,
+        excludeKeys: Set<String> = emptySet(),
+        penalizeEditable: Boolean = false
     ): List<Pair<ScreenNode, Int>> {
         val alternatives = target.split('|')
             .map { Text.normalize(it) }
@@ -96,6 +111,7 @@ object ScreenMatcher {
         for (node in snapshot.nodes) {
             if (!node.enabled) continue
             if (requireClickable && !node.clickable) continue
+            if (node.key in excludeKeys) continue
 
             var score = 0
             val candidates = listOfNotNull(
@@ -126,6 +142,9 @@ object ScreenMatcher {
             if (score == 0) continue
             if (node.clickable) score += 8
             if (!node.text.isNullOrBlank()) score += 3
+            // A text field that merely contains what we typed is not a tap target.
+            if (penalizeEditable && node.editable) score -= 40
+            if (score <= 0) continue
             out.add(node to score)
         }
 
@@ -140,8 +159,12 @@ object ScreenMatcher {
      * Finds the field to type into. Prefers the focused editable, then an editable matching
      * [hint], then any editable at all.
      */
-    fun findEditable(snapshot: ScreenSnapshot, hint: String? = null): ScreenNode? {
-        val editables = snapshot.nodes.filter { it.editable && it.enabled }
+    fun findEditable(
+        snapshot: ScreenSnapshot,
+        hint: String? = null,
+        excludeKeys: Set<String> = emptySet()
+    ): ScreenNode? {
+        val editables = snapshot.nodes.filter { it.editable && it.enabled && it.key !in excludeKeys }
         if (editables.isEmpty()) return null
         editables.firstOrNull { it.focused }?.let { return it }
         if (!hint.isNullOrBlank()) {

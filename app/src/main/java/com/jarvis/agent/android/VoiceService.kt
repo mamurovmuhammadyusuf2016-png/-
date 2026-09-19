@@ -72,8 +72,10 @@ class VoiceService : android.app.Service() {
             speaking = isSpeaking
             if (isSpeaking) {
                 // Stop listening while we talk, otherwise Jarvis transcribes itself.
+                JarvisRuntime.setState(JarvisRuntime.AgentState.SPEAKING)
                 cancelSession()
             } else {
+                if (!JarvisRuntime.busy) JarvisRuntime.settleState()
                 scheduleRestart(RESTART_DELAY_MS)
             }
         }
@@ -91,6 +93,7 @@ class VoiceService : android.app.Service() {
         hintGiven = false
         JarvisRuntime.speaker?.setLanguage(JarvisRuntime.requirePrefs().language)
         JarvisRuntime.log("Listening started")
+        JarvisRuntime.setState(JarvisRuntime.AgentState.LISTENING)
         scheduleRestart(200)
         return START_STICKY
     }
@@ -106,6 +109,8 @@ class VoiceService : android.app.Service() {
         sessionActive = false
         main.removeCallbacks(restartRunnable)
         destroyRecognizer()
+        JarvisRuntime.micLevel = 0f
+        JarvisRuntime.setState(JarvisRuntime.AgentState.IDLE)
         JarvisRuntime.log("Listening stopped")
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -246,10 +251,15 @@ class VoiceService : android.app.Service() {
         override fun onReadyForSpeech(params: Bundle?) {
             // A session really started, so whatever was wedged is fine again.
             consecutiveClientErrors = 0
+            if (!JarvisRuntime.busy) JarvisRuntime.setState(JarvisRuntime.AgentState.LISTENING)
         }
 
         override fun onBeginningOfSpeech() {}
-        override fun onRmsChanged(rmsdB: Float) {}
+
+        override fun onRmsChanged(rmsdB: Float) {
+            // The API reports roughly -2..10 dB; map it to 0..1 for the reactor.
+            JarvisRuntime.micLevel = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
+        }
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() {}
         override fun onEvent(eventType: Int, params: Bundle?) {}
@@ -257,6 +267,7 @@ class VoiceService : android.app.Service() {
 
         override fun onError(error: Int) {
             sessionActive = false
+            JarvisRuntime.micLevel = 0f
             when (error) {
                 // The normal "nobody said anything" case — not worth a log line.
                 SpeechRecognizer.ERROR_NO_MATCH,
@@ -267,6 +278,7 @@ class VoiceService : android.app.Service() {
 
                 SpeechRecognizer.ERROR_CLIENT -> {
                     JarvisRuntime.log("Распознавание: ${describeError(error)}, пересоздаю распознаватель")
+                    if (!JarvisRuntime.busy) JarvisRuntime.setState(JarvisRuntime.AgentState.ERROR)
                     handleClientError()
                 }
 
@@ -299,6 +311,7 @@ class VoiceService : android.app.Service() {
         override fun onResults(results: Bundle?) {
             sessionActive = false
             consecutiveClientErrors = 0
+            JarvisRuntime.micLevel = 0f
             val texts = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
             val heard = texts.firstOrNull()?.trim().orEmpty()
             if (heard.isNotEmpty()) {

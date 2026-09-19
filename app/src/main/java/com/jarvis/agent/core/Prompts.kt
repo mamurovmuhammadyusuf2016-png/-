@@ -34,6 +34,14 @@ Rules:
    not visible, add a "scroll" step before tapping it.
 6. Speak the user's language. If the command is Russian, "say" must be Russian.
 7. Never invent a package name; "open_app" takes the human-readable name.
+8. Searching inside an app: tap the search box, "type_text" the query, then tap the RESULT
+   ROW — never tap the search box again. After typing, the search box itself contains the
+   query, so its text is not the result.
+9. Sending a message: only type the message once the chat is open, and give that step a
+   "target" naming the message box (e.g. "message|сообщение"). Never type the message into
+   the search box — that would erase the search instead of writing a message.
+10. Keep waits short: the agent already waits for the screen to react. Use "wait" only when
+   an app is known to be slow, and never more than 1000 ms.
 """.trimIndent()
 
     fun userMessage(request: PlanRequest, maxApps: Int = 60): String {

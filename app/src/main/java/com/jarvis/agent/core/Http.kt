@@ -9,6 +9,9 @@ data class HttpResponse(val code: Int, val body: String)
 
 interface HttpTransport {
     fun post(url: String, headers: Map<String, String>, body: String): HttpResponse
+
+    /** Only used to list available models; transports in tests can ignore it. */
+    fun get(url: String, headers: Map<String, String>): HttpResponse = HttpResponse(0, "")
 }
 
 /** Plain HttpURLConnection — works the same on the JVM and on Android, no extra deps. */
@@ -17,15 +20,28 @@ class UrlHttpTransport(
     private val readTimeoutMs: Int = 60_000
 ) : HttpTransport {
 
-    override fun post(url: String, headers: Map<String, String>, body: String): HttpResponse {
+    override fun post(url: String, headers: Map<String, String>, body: String): HttpResponse =
+        request(url, "POST", headers, body)
+
+    override fun get(url: String, headers: Map<String, String>): HttpResponse =
+        request(url, "GET", headers, null)
+
+    private fun request(
+        url: String,
+        method: String,
+        headers: Map<String, String>,
+        body: String?
+    ): HttpResponse {
         val connection = URL(url).openConnection() as HttpURLConnection
         try {
-            connection.requestMethod = "POST"
+            connection.requestMethod = method
             connection.connectTimeout = connectTimeoutMs
             connection.readTimeout = readTimeoutMs
-            connection.doOutput = true
             for ((k, v) in headers) connection.setRequestProperty(k, v)
-            connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            if (body != null) {
+                connection.doOutput = true
+                connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            }
 
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream

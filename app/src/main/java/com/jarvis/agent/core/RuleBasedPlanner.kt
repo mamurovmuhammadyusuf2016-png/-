@@ -39,16 +39,16 @@ class RuleBasedPlanner : Planner {
         if (normalized.isEmpty()) return Plan(emptyList(), null, name)
 
         if (Phrases.isCancel(normalized)) {
-            return Plan(listOf(Action.Done("Отменено")), "Отменено", name)
+            return Plan(listOf(Action.Done("Отменено")), "Отменено", name, confident = true)
         }
         if (Phrases.isBack(normalized)) {
-            return Plan(listOf(Action.Back, Action.Done("Готово")), null, name)
+            return Plan(listOf(Action.Back, Action.Done("Готово")), null, name, confident = true)
         }
         if (Phrases.isHome(normalized)) {
-            return Plan(listOf(Action.Home, Action.Done("Готово")), null, name)
+            return Plan(listOf(Action.Home, Action.Done("Готово")), null, name, confident = true)
         }
         if (Phrases.isRecents(normalized)) {
-            return Plan(listOf(Action.Recents, Action.Done("Готово")), null, name)
+            return Plan(listOf(Action.Recents, Action.Done("Готово")), null, name, confident = true)
         }
 
         reScroll.find(raw)?.let { m ->
@@ -56,7 +56,8 @@ class RuleBasedPlanner : Planner {
             return Plan(
                 listOf(Action.Scroll(direction), Action.Done("Готово")),
                 null,
-                name
+                name,
+                confident = true
             )
         }
 
@@ -71,20 +72,33 @@ class RuleBasedPlanner : Planner {
         }
 
         reFind.find(raw)?.let { m ->
-            return Plan(listOf(Action.Find(cleanTarget(m.groupValues[1]))), null, name)
+            return Plan(
+                listOf(Action.Find(cleanTarget(m.groupValues[1]))),
+                null,
+                name,
+                confident = true
+            )
         }
 
         reTap.find(raw)?.let { m ->
             val target = cleanTarget(m.groupValues[1])
-            return Plan(listOf(Action.Tap(target), Action.Done("Готово")), null, name)
+            return Plan(
+                listOf(Action.Tap(target), Action.Done("Готово")),
+                null,
+                name,
+                confident = true
+            )
         }
 
         reOpen.find(raw)?.let { m ->
             val app = cleanTarget(m.groupValues[1])
+            // Only shortcut the model when we can actually see that app on the phone.
+            val known = AppMatcher.resolve(app, request.installedApps) != null
             return Plan(
                 listOf(Action.OpenApp(app), Action.Done("Открываю $app")),
                 "Открываю $app",
-                name
+                name,
+                confident = known
             )
         }
 
@@ -93,14 +107,20 @@ class RuleBasedPlanner : Planner {
             return Plan(
                 listOf(Action.TypeText(text), Action.Done("Напечатано")),
                 null,
-                name
+                name,
+                confident = true
             )
         }
 
         // Last resort: treat a bare app-like phrase ("телеграм") as "open it".
         val bestApp = AppMatcher.rank(normalized, request.installedApps).firstOrNull()
         if (normalized.split(' ').size <= 3 && (bestApp?.second ?: 0) >= 80) {
-            return Plan(listOf(Action.OpenApp(normalized), Action.Done("Открываю")), null, name)
+            return Plan(
+                listOf(Action.OpenApp(normalized), Action.Done("Открываю")),
+                null,
+                name,
+                confident = true
+            )
         }
 
         return Plan(
@@ -128,12 +148,12 @@ class RuleBasedPlanner : Planner {
             listOf(
                 Action.Speak("Открываю $appName"),
                 Action.OpenApp(appName),
-                Action.Wait(1500),
+                Action.Wait(400),
                 Action.Tap("поиск|search|найти"),
                 Action.TypeText(recipient),
-                Action.Wait(1200),
+                Action.Wait(400),
                 Action.Tap(recipient),
-                Action.Wait(1200),
+                Action.Wait(400),
                 Action.TypeText(message, "сообщение|message|написать сообщение|write a message"),
                 Action.Confirm("Отправить $recipient сообщение: $message?"),
                 Action.Tap("отправить|send"),

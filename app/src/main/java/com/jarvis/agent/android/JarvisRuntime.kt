@@ -5,8 +5,9 @@ import android.util.Log
 import com.jarvis.agent.core.AgentLoop
 import com.jarvis.agent.core.AgentResult
 import com.jarvis.agent.core.AgentStatus
+import com.jarvis.agent.core.AlwaysApprove
 import com.jarvis.agent.core.GroqPlanner
-import com.jarvis.agent.core.FallbackPlanner
+import com.jarvis.agent.core.LayeredPlanner
 import com.jarvis.agent.core.Planner
 import com.jarvis.agent.core.RuleBasedPlanner
 import com.jarvis.agent.core.VoiceOutput
@@ -26,8 +27,15 @@ object JarvisRuntime {
     private const val TAG = "JarvisRuntime"
     private const val MAX_LOG_LINES = 300
 
+    /** What the reactor on the main screen is showing. */
+    enum class AgentState { IDLE, LISTENING, THINKING, SPEAKING, ERROR }
+
     fun interface LogListener {
         fun onLog(lines: List<String>)
+    }
+
+    fun interface StateListener {
+        fun onState(state: AgentState)
     }
 
     private val executor = Executors.newSingleThreadExecutor { r ->
@@ -35,6 +43,7 @@ object JarvisRuntime {
     }
     private val logLines = ArrayDeque<String>()
     private val logListeners = mutableListOf<LogListener>()
+    private val stateListeners = mutableListOf<StateListener>()
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.US)
 
     @Volatile
@@ -51,6 +60,36 @@ object JarvisRuntime {
     var busy: Boolean = false
         private set
 
+    @Volatile
+    var state: AgentState = AgentState.IDLE
+        private set
+
+    /** 0..1 microphone loudness, read every frame by the reactor view. */
+    @Volatile
+    var micLevel: Float = 0f
+
+    fun setState(next: AgentState) {
+        if (state == next) return
+        state = next
+        if (next != AgentState.LISTENING) micLevel = 0f
+        val listeners = synchronized(stateListeners) { stateListeners.toList() }
+        for (l in listeners) l.onState(next)
+    }
+
+    /** Back to whatever the idle state is: listening if the service is up, otherwise idle. */
+    fun settleState() {
+        setState(if (VoiceService.listening) AgentState.LISTENING else AgentState.IDLE)
+    }
+
+    fun addStateListener(l: StateListener) {
+        synchronized(stateListeners) { stateListeners.add(l) }
+        l.onState(state)
+    }
+
+    fun removeStateListener(l: StateListener) {
+        synchronized(stateListeners) { stateListeners.remove(l) }
+    }
+
     fun init(context: Context) {
         if (appContext != null) return
         appContext = context.applicationContext
@@ -63,18 +102,44 @@ object JarvisRuntime {
 
     fun accessibilityReady(): Boolean = JarvisAccessibilityService.isRunning()
 
-    /** Claude when a key is configured, offline rules otherwise — and rules as the safety net. */
+    /**
+     * Offline rules answer the obvious commands instantly; Groq handles everything else.
+     * Without a key the rules are all there is.
+     */
     fun planner(): Planner {
         val p = requirePrefs()
         val rules = RuleBasedPlanner()
         if (p.apiKey.isBlank() && p.baseUrl == GroqPlanner.DEFAULT_BASE_URL) return rules
-        val claude = GroqPlanner(
+        return LayeredPlanner(rules, groq(), { log(it) })
+    }
+
+    fun groq(): GroqPlanner {
+        val p = requirePrefs()
+        return GroqPlanner(
             apiKeyProvider = { requirePrefs().apiKey },
-            model = p.model,
+            models = p.models(),
             baseUrl = p.baseUrl,
             log = { log(it) }
         )
-        return FallbackPlanner(claude, rules) { log("planner fallback: $it") }
+    }
+
+    /** Asks Groq which models this key may use, and writes them into the log. */
+    fun checkModels() {
+        executor.execute {
+            try {
+                log("Запрашиваю список моделей Groq…")
+                val models = groq().listModels()
+                if (models.isEmpty()) {
+                    log("Groq не вернул ни одной модели")
+                } else {
+                    log("Доступно моделей: ${models.size}")
+                    models.forEach { log("  • $it") }
+                    log("Впишите подходящую в поле «Модели» (через запятую — по порядку).")
+                }
+            } catch (e: Exception) {
+                log("Не удалось получить список моделей: ${e.message}")
+            }
+        }
     }
 
     /** Runs [command] on the agent thread; [onResult] is called on that same thread. */
@@ -92,14 +157,16 @@ object JarvisRuntime {
         }
         executor.execute {
             busy = true
+            setState(AgentState.THINKING)
             try {
                 log("command: $command")
                 val voice = VoiceOutput { text -> speaker?.say(text) }
+                val prefs = requirePrefs()
                 val loop = AgentLoop(
                     device = service,
                     planner = planner(),
                     voice = voice,
-                    confirmation = ConfirmationBus,
+                    confirmation = if (prefs.requireConfirmation) ConfirmationBus else AlwaysApprove,
                     log = { log(it) }
                 )
                 val result = loop.run(command)
@@ -112,6 +179,7 @@ object JarvisRuntime {
                 onResult(AgentResult(AgentStatus.FAILED, e.message ?: "error"))
             } finally {
                 busy = false
+                settleState()
             }
         }
     }

@@ -25,7 +25,14 @@ class AgentLoop(
     private val voice: VoiceOutput,
     private val confirmation: ConfirmationGate = AlwaysApprove,
     private val log: (String) -> Unit = {},
-    private val settleMillis: Long = 700L,
+    /** Fixed pause where waiting for a change makes no sense (scroll, back). */
+    private val settleMillis: Long = 350L,
+    /** How often to re-read the screen while waiting for it to change. */
+    private val pollMillis: Long = 150L,
+    /** Upper bound on waiting for a screen to react to a tap or keystroke. */
+    private val maxSettleMillis: Long = 1800L,
+    /** Upper bound on waiting for an app to come up. */
+    private val maxLaunchMillis: Long = 4000L,
     private val maxReplans: Int = 2,
     private val maxScrollSearch: Int = 3,
     private val minMatchScore: Int = 60
@@ -41,9 +48,17 @@ class AgentLoop(
     private val steps = ArrayList<String>()
     private val spoken = ArrayList<String>()
 
+    /**
+     * The field we typed into last. After typing a contact name into a search box, that box
+     * now contains the name and would out-match the real chat row — so it is excluded from
+     * the next tap, and from the next *hinted* text input.
+     */
+    private var lastTypedKey: String? = null
+
     fun run(command: String): AgentResult {
         steps.clear()
         spoken.clear()
+        lastTypedKey = null
 
         val cleaned = Phrases.stripWakeWord(command).trim()
         if (cleaned.isEmpty()) {
@@ -118,13 +133,14 @@ class AgentLoop(
         is Action.OpenApp -> openApp(action.query)
 
         is Action.Tap -> {
+            val before = signature(device.screen())
             val node = locate(action.target)
             if (node == null) {
                 Outcome.Replan("Элемент \"${action.target}\" не найден на экране")
             } else {
                 val ok = device.tap(node)
                 steps.add("tap ${node.label()}")
-                device.sleep(settleMillis)
+                awaitScreenChange(before, maxSettleMillis)
                 if (ok) Outcome.Continue
                 else Outcome.Replan("Не удалось нажать \"${action.target}\"")
             }
@@ -142,13 +158,22 @@ class AgentLoop(
         }
 
         is Action.TypeText -> {
-            val field = ScreenMatcher.findEditable(device.screen(), action.target)
+            val screen = device.screen()
+            val before = signature(screen)
+            val field = pickField(screen, action.target)
             if (field == null) {
-                Outcome.Replan("Нет поля ввода для текста \"${action.text}\"")
+                Outcome.Replan(
+                    if (action.target != null) {
+                        "Не нашёл поле \"${action.target}\" — похоже, нужный экран не открылся"
+                    } else {
+                        "Нет поля ввода для текста \"${action.text}\""
+                    }
+                )
             } else {
                 val ok = device.setText(field, action.text)
                 steps.add("type \"${action.text}\" into ${field.label()}")
-                device.sleep(settleMillis)
+                lastTypedKey = field.key
+                awaitScreenChange(before, maxSettleMillis)
                 if (ok) Outcome.Continue
                 else Outcome.Replan("Не удалось ввести текст")
             }
@@ -157,7 +182,7 @@ class AgentLoop(
         is Action.Scroll -> {
             repeat(action.times) {
                 device.scroll(action.direction)
-                device.sleep(settleMillis / 2)
+                device.sleep(settleMillis)
             }
             steps.add("scroll ${action.direction.name.lowercase()} x${action.times}")
             Outcome.Continue
@@ -227,11 +252,12 @@ class AgentLoop(
 
     private fun openApp(query: String): Outcome {
         val apps = device.installedApps()
+        val before = signature(device.screen())
         val match = AppMatcher.resolve(query, apps)
         if (match != null) {
             val launched = device.launchPackage(match.packageName)
             steps.add("open ${match.label} (${match.packageName})")
-            device.sleep(settleMillis * 2)
+            awaitScreenChange(before, maxLaunchMillis)
             return if (launched) Outcome.Continue
             else Outcome.Stop(AgentStatus.FAILED, "Не удалось запустить ${match.label}")
         }
@@ -239,14 +265,14 @@ class AgentLoop(
         for (pkg in AppMatcher.fallbackPackages(query)) {
             if (device.launchPackage(pkg)) {
                 steps.add("open $pkg (fallback)")
-                device.sleep(settleMillis * 2)
+                awaitScreenChange(before, maxLaunchMillis)
                 return Outcome.Continue
             }
         }
 
         if (AppMatcher.isSettingsQuery(query) && device.openSystemSettings()) {
             steps.add("open system settings")
-            device.sleep(settleMillis * 2)
+            awaitScreenChange(before, maxLaunchMillis)
             return Outcome.Continue
         }
 
@@ -259,7 +285,7 @@ class AgentLoop(
         bestMatch(device.screen(), target)?.let { return it }
         for (attempt in 1..maxScrollSearch) {
             device.scroll(ScrollDirection.DOWN)
-            device.sleep(settleMillis / 2)
+            device.sleep(settleMillis)
             steps.add("scroll-search #$attempt for \"$target\"")
             bestMatch(device.screen(), target)?.let { return it }
         }
@@ -267,8 +293,62 @@ class AgentLoop(
     }
 
     private fun bestMatch(snapshot: ScreenSnapshot, target: String): ScreenNode? {
-        val best = ScreenMatcher.rank(snapshot, target).firstOrNull() ?: return null
+        val best = ScreenMatcher.rank(
+            snapshot = snapshot,
+            target = target,
+            excludeKeys = setOfNotNull(lastTypedKey),
+            penalizeEditable = true
+        ).firstOrNull() ?: return null
         return if (best.second >= minMatchScore) best.first else null
+    }
+
+    /**
+     * Chooses the field to type into.
+     *
+     * A hinted input ("type the message into the message box") must land on a field we have
+     * not just used: if the only candidate is the search box we filled a moment ago, the
+     * chat did not open and typing there would wipe the search instead of writing a message.
+     */
+    private fun pickField(screen: ScreenSnapshot, hint: String?): ScreenNode? {
+        val editables = screen.nodes.filter { it.editable && it.enabled }
+        if (editables.isEmpty()) return null
+        val used = lastTypedKey
+        val fresh = if (used == null) editables else editables.filter { it.key != used }
+        return when {
+            fresh.isNotEmpty() ->
+                ScreenMatcher.findEditable(ScreenSnapshot(screen.packageName, fresh), hint)
+            // No new field appeared and the plan asked for a specific one — bail out.
+            hint != null -> null
+            else -> ScreenMatcher.findEditable(screen, null)
+        }
+    }
+
+    /** A cheap fingerprint of what is on screen, used to tell "it reacted" from "it didn't". */
+    private fun signature(snapshot: ScreenSnapshot): String {
+        val sb = StringBuilder(snapshot.packageName ?: "?")
+        sb.append('#').append(snapshot.nodes.size)
+        for (n in snapshot.nodes.take(25)) {
+            sb.append('|').append(n.viewId ?: "").append(':')
+                .append(n.text ?: "").append(':').append(n.contentDescription ?: "")
+        }
+        return sb.toString()
+    }
+
+    /**
+     * Waits only as long as the screen actually needs. A fast app continues after one poll
+     * instead of sitting out a fixed pause; a slow one gets up to [maxMillis].
+     */
+    private fun awaitScreenChange(before: String, maxMillis: Long) {
+        var waited = 0L
+        while (waited < maxMillis) {
+            device.sleep(pollMillis)
+            waited += pollMillis
+            if (signature(device.screen()) != before) {
+                // Let the new screen finish laying out before we read it for real.
+                device.sleep(pollMillis)
+                return
+            }
+        }
     }
 
     private fun say(text: String) {

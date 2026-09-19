@@ -20,10 +20,20 @@ class Prefs(context: Context) {
             .ifBlank { BuildConfig.GROQ_API_KEY }
         set(value) = sp.edit().putString(KEY_API, value.trim()).apply()
 
+    /**
+     * Comma-separated preference order of Groq models. The first one that answers is used;
+     * names on a free tier change, so a list beats a single value.
+     */
     var model: String
-        get() = sp.getString(KEY_MODEL, GroqPlanner.DEFAULT_MODEL)
-            .orEmpty().ifBlank { GroqPlanner.DEFAULT_MODEL }
+        get() = sp.getString(KEY_MODEL, defaultModels).orEmpty().ifBlank { defaultModels }
         set(value) = sp.edit().putString(KEY_MODEL, value.trim()).apply()
+
+    fun models(): List<String> = GroqPlanner.parseModels(model)
+
+    /** Ask before sending, deleting, buying or calling. Turning it off is faster and riskier. */
+    var requireConfirmation: Boolean
+        get() = sp.getBoolean(KEY_REQUIRE_CONFIRM, true)
+        set(value) = sp.edit().putBoolean(KEY_REQUIRE_CONFIRM, value).apply()
 
     /** Point this at your own proxy to keep the API key off the phone. */
     var baseUrl: String
@@ -55,6 +65,9 @@ class Prefs(context: Context) {
     fun wakeWords(): List<String> =
         (listOf(wakeWord) + Phrases.DEFAULT_WAKE_WORDS).filter { it.isNotBlank() }.distinct()
 
+    private val defaultModels: String
+        get() = GroqPlanner.DEFAULT_MODELS.joinToString(", ")
+
     private companion object {
         const val KEY_API = "api_key"
         const val KEY_MODEL = "model"
@@ -63,5 +76,6 @@ class Prefs(context: Context) {
         const val KEY_REQUIRE_WAKE = "require_wake"
         const val KEY_LANG = "language"
         const val KEY_OFFLINE = "prefer_offline"
+        const val KEY_REQUIRE_CONFIRM = "require_confirmation"
     }
 }
