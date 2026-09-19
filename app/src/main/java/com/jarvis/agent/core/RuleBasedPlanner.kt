@@ -13,15 +13,19 @@ class RuleBasedPlanner : Planner {
 
     override val name: String = "rules"
 
-    private val openVerbs = "открой|открыть|откройте|запусти|запустить|включи|включить|покажи|зайди в|зайди|перейди в|open|launch|start|go to|show"
-    private val writeVerbs = "напиши|написать|напишите|отправь|отправить|передай|send|write|text|message"
-    private val typeVerbs = "напечатай|введи|впиши|type|input|enter text"
+    // Stems, not fixed forms: people say "напишу", "напишешь", "отправлю", "передам", and a
+    // recogniser will hand over whichever ending it heard.
+    private val openVerbs =
+        "откро[а-яё]*|открыть|запуст[а-яё]*|включ[а-яё]*|покаж[а-яё]*|зайди в|зайди|перейди в|open|launch|start|go to|show"
+    private val writeVerbs =
+        "напиш[а-яё]*|напис[а-яё]*|отправ[а-яё]*|перед[аеёи][а-яё]*|скинь|send|write|text|message"
+    private val typeVerbs = "напечата[а-яё]*|введи|впиши|type|input|enter text"
 
     /** Apps where "напиши X: текст" means sending a message to a person. */
     private val messengers = setOf("telegram", "whatsapp", "messages", "vk", "instagram")
 
     private val reScroll = Regex(
-        "(?iu)^\\s*(?:прокрути(?:ть)?|пролистай|полистай|листай|проскролл[ьия]?|скролл|scroll|swipe)\\b\\s*(.*)$",
+        "(?iu)^\\s*(?:прокрути(?:ть)?|пролистай|полистай|листай|проскролл[ьия]?|скролл|scroll|swipe)(?![\\p{L}])\\s*(.*)$",
         RegexOption.IGNORE_CASE
     )
     private val reOpenAndWrite = Regex(
@@ -120,14 +124,38 @@ class RuleBasedPlanner : Planner {
 
         reOpen.find(raw)?.let { m ->
             val spoken = cleanTarget(m.groupValues[1])
-            val best = AppMatcher.rank(spoken, request.installedApps).firstOrNull()
-            // Use the app's own label so the executor cannot re-resolve to something else.
-            val appName = if ((best?.second ?: 0) >= AppMatcher.MIN_SCORE) best!!.first.label else spoken
+            val (app, score, rest) = longestAppPrefix(spoken, request.installedApps)
+
+            if (app == null || score < AppMatcher.MIN_SCORE) {
+                return Plan(
+                    listOf(Action.OpenApp(spoken), Action.Done("Открываю $spoken")),
+                    "Открываю $spoken",
+                    name,
+                    confident = false
+                )
+            }
+
+            // "открой телеграм напишу Ивану ..." — the tail is a second command, not part of
+            // the app's name. Without this the whole sentence became the app name and the
+            // agent answered "нет такого приложения".
+            if (rest.isNotEmpty()) {
+                val tail = reWrite.find(rest)
+                if (tail != null && AppMatcher.canonicalName(app.label) in messengers) {
+                    return messagePlan(app.label, tail.groupValues[1])
+                }
+                return Plan(
+                    listOf(Action.OpenApp(app.label), Action.Done("Открываю ${app.label}")),
+                    "Открываю ${app.label}",
+                    name,
+                    confident = false
+                )
+            }
+
             return Plan(
-                listOf(Action.OpenApp(appName), Action.Done("Открываю $appName")),
-                "Открываю $appName",
+                listOf(Action.OpenApp(app.label), Action.Done("Открываю ${app.label}")),
+                "Открываю ${app.label}",
                 name,
-                confident = (best?.second ?: 0) >= AppMatcher.CONFIDENT_SCORE
+                confident = score >= AppMatcher.CONFIDENT_SCORE
             )
         }
 
@@ -191,6 +219,31 @@ class RuleBasedPlanner : Planner {
         actions.add(Action.Tap("отправить|send"))
         actions.add(Action.Done("Сообщение отправлено"))
         return Plan(actions, null, name, confident = false)
+    }
+
+    /**
+     * Splits "Telegram напишу Ивану привет" into the app and the leftover, by trying
+     * progressively longer prefixes and keeping the best-scoring one.
+     */
+    private fun longestAppPrefix(
+        spoken: String,
+        apps: List<AppEntry>
+    ): Triple<AppEntry?, Int, String> {
+        val words = spoken.split(' ').filter { it.isNotBlank() }
+        if (words.isEmpty()) return Triple(null, 0, "")
+        var best: AppEntry? = null
+        var bestScore = 0
+        var used = 0
+        for (n in 1..minOf(words.size, 4)) {
+            val candidate = words.take(n).joinToString(" ")
+            val hit = AppMatcher.rank(candidate, apps).firstOrNull() ?: continue
+            if (hit.second > bestScore) {
+                bestScore = hit.second
+                best = hit.first
+                used = n
+            }
+        }
+        return Triple(best, bestScore, words.drop(used).joinToString(" "))
     }
 
     private fun cleanTarget(raw: String): String =

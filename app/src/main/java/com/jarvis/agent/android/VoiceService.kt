@@ -113,6 +113,13 @@ class VoiceService : android.app.Service() {
             stopEverything()
             return START_NOT_STICKY
         }
+        if (!hasMicPermission()) {
+            // Android 14+ throws when a microphone foreground service starts without it,
+            // which happens on a START_STICKY restart after the user revoked the permission.
+            JarvisRuntime.log("Нет доступа к микрофону — останавливаюсь")
+            stopSelf()
+            return START_NOT_STICKY
+        }
         startInForeground()
         shuttingDown = false
         listening = true
@@ -233,8 +240,8 @@ class VoiceService : android.app.Service() {
                 putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
                 // Google's default trailing silence is over a second; most of the "it is
                 // so slow" feeling is spent here.
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 700L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 500L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 700)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 500)
                 if (prefs.preferOffline) {
                     putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
                 }

@@ -27,7 +27,8 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        buildConfigField("String", "GROQ_API_KEY", "\"$groqApiKey\"")
+        val escapedKey = groqApiKey.replace("\\", "\\\\").replace("\"", "\\\"")
+        buildConfigField("String", "GROQ_API_KEY", "\"$escapedKey\"")
     }
 
     buildTypes {

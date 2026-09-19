@@ -531,6 +531,38 @@ class RuleBasedPlannerTest {
     }
 
     @Test
+    fun theRestOfTheSentenceIsNotPartOfTheAppName() {
+        // Reported from a real phone: "открой Telegram напишу Твинк что я опаздываю"
+        // became a request to open an app literally called
+        // "Telegram напишу Твинк что я опаздываю", and the agent answered
+        // "нет такого приложения Telegram".
+        val p = plan("открой Telegram напишу Твинк что я опаздываю на пять минут")
+        assertTrue("Telegram must still be opened", p.actions.any { it == Action.OpenApp("Telegram") })
+        assertTrue(
+            "and the rest must become the message",
+            p.actions.any { it is Action.TypeText && it.text == "я опаздываю на пять минут" }
+        )
+        assertTrue(p.actions.any { it is Action.Confirm })
+    }
+
+    @Test
+    fun anyEndingOfTheVerbIsUnderstood() {
+        for (verb in listOf("напиши", "напишу", "напишешь", "отправь", "отправлю", "передам")) {
+            val p = plan("открой Telegram $verb Ивану привет")
+            assertTrue("«$verb» must open Telegram", p.actions.any { it == Action.OpenApp("Telegram") })
+            assertTrue("«$verb» must reach the message", p.actions.any { it is Action.TypeText })
+        }
+    }
+
+    @Test
+    fun anUnknownTailStillOpensTheApp() {
+        // Even when the rest makes no sense to the rules, the app the user named opens.
+        val p = plan("открой Chrome и найди там что нибудь про погоду")
+        assertTrue(p.actions.any { it == Action.OpenApp("Chrome") })
+        assertFalse("the model should get a say about the rest", p.confident)
+    }
+
+    @Test
     fun saysItDoesNotUnderstandRatherThanGuessing() {
         assertTrue(plan("сделай мне красиво").actions.first() is Action.Fail)
     }
